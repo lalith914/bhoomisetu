@@ -1,0 +1,54 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07130f"/>
+      <stop offset="1" stop-color="#173d2b"/>
+    </linearGradient>
+    <linearGradient id="land" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9ad957"/>
+      <stop offset="1" stop-color="#315f36"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <circle cx="970" cy="260" r="230" fill="#b8ff5a" opacity=".05"/>
+  <circle cx="970" cy="260" r="175" fill="none" stroke="#b8ff5a" opacity=".25"/>
+  <circle cx="970" cy="260" r="125" fill="none" stroke="#b8ff5a" opacity=".2"/>
+
+  <path d="M690 430 820 170 940 350 1030 220 1160 430Z"
+        fill="url(#land)" opacity=".8"/>
+  <path d="M690 430 820 170 940 350 1030 220 1160 430"
+        fill="none" stroke="#c8ff81" stroke-width="4"/>
+
+  <path d="M750 410 850 250 950 390 1040 280 1110 410"
+        fill="none" stroke="#e0ffb3" stroke-width="2" opacity=".6"/>
+
+  <g fill="none" stroke="#b8ff5a" stroke-width="2" opacity=".65">
+    <path d="M780 220 1110 220"/>
+    <path d="M730 290 1150 290"/>
+    <path d="M710 360 1170 360"/>
+    <path d="M850 130 850 450"/>
+    <path d="M950 130 950 450"/>
+    <path d="M1050 130 1050 450"/>
+  </g>
+
+  <text x="90" y="210" fill="#b8ff5a"
+        font-family="Arial,sans-serif" font-size="25"
+        letter-spacing="8">GEOSPATIAL INTELLIGENCE</text>
+
+  <text x="85" y="315" fill="#ffffff"
+        font-family="Arial,sans-serif" font-size="76"
+        font-weight="bold">BHOOMISETU</text>
+
+  <text x="92" y="375" fill="#d2dfd5"
+        font-family="Arial,sans-serif" font-size="27">
+    Discover land. Understand its potential.
+  </text>
+
+  <path d="M92 425H390" stroke="#b8ff5a" stroke-width="4"/>
+  <text x="92" y="475" fill="#a8b9ac"
+        font-family="Arial,sans-serif" font-size="19"
+        letter-spacing="4">LAND · SATELLITE · INTELLIGENCE</text>
+</svg>
