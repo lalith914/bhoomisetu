@@ -3228,3 +3228,26 @@
   border-radius: 6px;
 }
 
+/* =========================================================
+   AUTHENTICATION — FORGOT PASSWORD LINK
+   ========================================================= */
+
+.forgot-password-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+  margin-bottom: 4px;
+}
+
+.forgot-password-row a {
+  color: #b8ff5a;
+  font: 300 8px "DM Mono", monospace;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+}
+
+.forgot-password-row a:hover {
+  color: #edf4ee;
+  text-decoration: underline;
+}
+
