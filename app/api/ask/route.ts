@@ -5,6 +5,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
 
   const reportId = String(body?.reportId || "").trim();
+  const question = String(body?.question || "").trim();
+  const apiKey = process.env.GEMINI_API_KEY;
 
   if (!reportId) {
     return NextResponse.json(
@@ -13,7 +15,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  if (!question) {
+    return NextResponse.json(
+      { error: "Question is required." },
+      { status: 400 }
+    );
+  }
 
   if (!apiKey) {
     return NextResponse.json(
@@ -22,29 +29,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const question = String(body?.question || "").trim();
-
-  if (!question) {
-    return NextResponse.json(
-      { error: "Question is required." },
-      { status: 400 }
-    );
-  }
-
-  const model =
-    process.env.GEMINI_MODEL || "gemini-2.5-flash";
-
   const prompt = `
 You are BhoomiSetu's land intelligence assistant.
 
-Answer the user's question using only the supplied parcel analysis.
+Answer using only the supplied parcel analysis.
 
 Rules:
-- Never invent soil, water, ownership, title or agricultural facts.
+- Never invent soil, water, ownership or agricultural facts.
 - Clearly state when field verification is required.
 - Keep answers concise and useful.
 - Do not make legal ownership or title claims.
-- Explain technical terms in simple language.
+- Explain technical terms simply.
 
 USER QUESTION:
 ${question}
@@ -55,22 +50,16 @@ ${JSON.stringify(body?.analysis || {})}
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      "https://generativelanguage.googleapis.com/v1beta/interactions",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: prompt }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.3,
-          },
+          model: "gemini-3.8-flash",
+          input: prompt,
         }),
         cache: "no-store",
       }
@@ -83,15 +72,19 @@ ${JSON.stringify(body?.analysis || {})}
         {
           error:
             data?.error?.message ||
-            "Gemini AI request failed.",
+            "Gemini Interactions API request failed.",
         },
         { status: 502 }
       );
     }
 
-    const answer = data?.candidates?.[0]?.content?.parts
-      ?.map((part: any) => part.text || "")
-      .join("");
+    const answer = (data?.steps || [])
+      .filter((step: any) => step.type === "model_output")
+      .flatMap((step: any) => step.content || [])
+      .filter((part: any) => part.type === "text")
+      .map((part: any) => part.text || "")
+      .join("\n")
+      .trim();
 
     return NextResponse.json({
       answer: answer || "Gemini returned no answer.",
