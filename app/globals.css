@@ -3217,3 +3217,14 @@
   .buyer-public-facts { grid-template-columns:1fr; }
   .public-land-facts { grid-template-columns:1fr 1fr; }
 }
+
+.signin-success {
+  padding: 12px 14px;
+  border: 1px solid rgba(184, 255, 90, 0.35);
+  background: rgba(184, 255, 90, 0.08);
+  color: #b8ff5a;
+  font-size: 13px;
+  line-height: 1.6;
+  border-radius: 6px;
+}
+
