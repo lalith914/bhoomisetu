@@ -327,6 +327,7 @@ async function askGeospatialAi(input: {
   return data?.analysis || data;
 }
 
+
 async function askGemini(input: {
   scene: any;
   soil: any;
@@ -340,34 +341,22 @@ async function askGemini(input: {
     throw new Error("GEMINI_API_KEY is not configured.");
   }
 
-  const model =
-    process.env.GEMINI_MODEL || "gemini-2.5-flash";
-
   const prompt = `
 You are BhoomiSetu's geospatial intelligence engine.
 
 Analyze this land parcel using ONLY the supplied evidence.
 
-IMPORTANT RULES:
+Rules:
 1. Never invent measurements or facts.
-2. Distinguish satellite inference from field or laboratory verification.
+2. Distinguish satellite inference from field verification.
 3. If soil data is missing, say unavailable.
 4. If evidence is insufficient, return null for the overall score.
 5. Do not make legal ownership or title claims.
-6. Do not claim that a satellite image proves land ownership.
+6. Never claim satellite imagery proves ownership.
 
 Return valid JSON only with these keys:
-
-summary,
-soil,
-water,
-terrain,
-vegetation,
-agriculture,
-scores,
-risks,
-recommendedUses,
-confidence.
+summary, soil, water, terrain, vegetation,
+agriculture, scores, risks, recommendedUses, confidence.
 
 scores must contain:
 soil, water, terrain, vegetation, agriculture, overall.
@@ -391,31 +380,24 @@ ${input.elevation ?? "Unavailable"}
 SATELLITE SCENE:
 ${JSON.stringify(input.scene)}
 
-SOIL PROVIDER DATA:
+SOIL DATA:
 ${JSON.stringify(input.soil)}
 
-RASTER SPECTRAL EVIDENCE:
+RASTER EVIDENCE:
 ${JSON.stringify(input.raster)}
 `;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
       },
       body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompt }],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-        },
+        model: "gemini-3.8-flash",
+        input: prompt,
       }),
       cache: "no-store",
     }
@@ -425,24 +407,35 @@ ${JSON.stringify(input.raster)}
 
   if (!response.ok) {
     throw new Error(
-      data?.error?.message || "Gemini AI request failed."
+      data?.error?.message || "Gemini analysis failed."
     );
   }
 
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map((part: any) => part.text || "")
-    .join("");
+  const outputText = (data?.steps || [])
+    .filter((step: any) => step.type === "model_output")
+    .flatMap((step: any) => step.content || [])
+    .filter((part: any) => part.type === "text")
+    .map((part: any) => part.text || "")
+    .join("\n")
+    .trim();
 
-  if (!text) {
+  if (!outputText) {
     throw new Error("Gemini returned no analysis.");
   }
 
   try {
-    return JSON.parse(text);
+    const cleaned = outputText
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+
+    return JSON.parse(cleaned);
   } catch {
     throw new Error("Gemini returned invalid JSON.");
   }
 }
+
 
 export async function POST(request: NextRequest) {
   try {
