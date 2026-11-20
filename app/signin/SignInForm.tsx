@@ -17,6 +17,7 @@ export default function SignInForm() {
   const [busy, setBusy] = useState(false);
 
   const confirmed = params.get("confirmed") === "1";
+  const passwordReset = params.get("password_reset") === "1";
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -33,7 +34,7 @@ export default function SignInForm() {
 
     try {
       const { error: signInError } = await sb.auth.signInWithPassword({
-        email: email.trim(),
+        email: email.trim().toLowerCase(),
         password,
       });
 
@@ -43,14 +44,15 @@ export default function SignInForm() {
         return;
       }
 
-      const { data: verified } = await sb.auth.getUser();
+      const { data: verified, error: userError } = await sb.auth.getUser();
 
-      if (!verified.user) {
-        const { data: refreshed } = await sb.auth.refreshSession();
+      if (userError || !verified.user) {
+        const { data: refreshed, error: refreshError } =
+          await sb.auth.refreshSession();
 
-        if (!refreshed.session?.user) {
+        if (refreshError || !refreshed.session?.user) {
           setError(
-            "Login succeeded, but the session could not be restored. Check your Supabase Auth URL and cookie configuration."
+            "Login succeeded, but your session could not be restored. Please try again."
           );
           setBusy(false);
           return;
@@ -58,7 +60,6 @@ export default function SignInForm() {
       }
 
       const next = params.get("next");
-
       const safeNext =
         next && next.startsWith("/") && !next.startsWith("//")
           ? next
@@ -91,9 +92,7 @@ export default function SignInForm() {
       </header>
 
       <section className="signin-content">
-        <div className="signin-kicker">
-          BHOOMISETU / SECURE ACCESS
-        </div>
+        <div className="signin-kicker">BHOOMISETU / SECURE ACCESS</div>
 
         <h1>
           Enter the
@@ -102,7 +101,8 @@ export default function SignInForm() {
         </h1>
 
         <p className="signin-intro">
-          Sign in to explore land intelligence, manage properties and make informed decisions.
+          Sign in to explore land intelligence, manage properties and make
+          informed decisions.
         </p>
 
         <form className="signin-form" onSubmit={handleSubmit}>
@@ -130,14 +130,24 @@ export default function SignInForm() {
             />
           </label>
 
-          {confirmed && !error && (
-            <div className="signin-error">
-              Account created. If email confirmation is enabled, confirm your email first, then sign in.
+          <div className="forgot-password-row">
+            <Link href="/forgot-password">FORGOT PASSWORD?</Link>
+          </div>
+
+          {passwordReset && (
+            <div className="signin-success" role="status">
+              Your password has been updated. Sign in using your new password.
+            </div>
+          )}
+
+          {confirmed && (
+            <div className="signin-success" role="status">
+              Your email has been confirmed. You can now sign in.
             </div>
           )}
 
           {error && (
-            <div className="signin-error">
+            <div className="signin-error" role="alert">
               {error}
             </div>
           )}
