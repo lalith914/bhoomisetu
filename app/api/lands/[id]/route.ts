@@ -34,6 +34,7 @@ export async function GET(
     },
   });
 
+  // Fetch the property record.
   const { data: land, error: landError } = await sb
     .from("lands")
     .select(
@@ -43,8 +44,10 @@ export async function GET(
     .maybeSingle();
 
   if (landError) {
+    console.error("Land lookup failed:", landError.message);
+
     return NextResponse.json(
-      { error: landError.message },
+      { error: "Unable to retrieve land details." },
       { status: 502 }
     );
   }
@@ -56,7 +59,15 @@ export async function GET(
     );
   }
 
-  // Retrieve every uploaded property photo in display order.
+  // Do not expose pending or rejected properties publicly.
+  if (land.verified !== true) {
+    return NextResponse.json(
+      { error: "This property is not publicly available yet." },
+      { status: 404 }
+    );
+  }
+
+  // Retrieve photos only after verification is confirmed.
   const { data: photos, error: photoError } = await sb
     .from("land_photos")
     .select("public_url,sort_order,is_cover")
@@ -64,16 +75,26 @@ export async function GET(
     .order("sort_order", { ascending: true });
 
   if (photoError) {
+    console.error("Property photo lookup failed:", photoError.message);
+
     return NextResponse.json(
       { error: "Unable to retrieve property photos." },
       { status: 502 }
     );
   }
 
-  const { data: boundary, error: boundaryError } = await sb.rpc(
-    "get_land_boundary",
-    { p_land_id: id }
-  );
+  // Retrieve the saved property boundary.
+  const { data: boundary, error: boundaryError } =
+    await sb.rpc("get_land_boundary", {
+      p_land_id: id,
+    });
+
+  if (boundaryError) {
+    console.warn(
+      "Property boundary unavailable:",
+      boundaryError.message
+    );
+  }
 
   return NextResponse.json({
     land: {
