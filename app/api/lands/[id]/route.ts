@@ -2,6 +2,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+type LandRecord = {
+  [key: string]: any;
+  id: string;
+  verified: boolean | null;
+  listing_type: string | null;
+  lease_duration: string | null;
+};
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -34,8 +42,7 @@ export async function GET(
     },
   });
 
-  // Fetch the property and owner-provided land descriptions.
-  const { data: land, error: landError } = await sb
+  const { data: landData, error: landError } = await sb
     .from("lands")
     .select(
       [
@@ -71,6 +78,8 @@ export async function GET(
     );
   }
 
+  const land = landData as unknown as LandRecord | null;
+
   if (!land) {
     return NextResponse.json(
       { error: "Land record not found." },
@@ -78,7 +87,6 @@ export async function GET(
     );
   }
 
-  // Only verified properties are publicly accessible.
   if (land.verified !== true) {
     return NextResponse.json(
       { error: "This property is not publicly available yet." },
@@ -86,7 +94,6 @@ export async function GET(
     );
   }
 
-  // Retrieve owner photographs after verification.
   const { data: photos, error: photoError } = await sb
     .from("land_photos")
     .select("public_url,sort_order,is_cover")
@@ -105,7 +112,6 @@ export async function GET(
     );
   }
 
-  // Retrieve the saved property boundary.
   const { data: boundary, error: boundaryError } =
     await sb.rpc("get_land_boundary", {
       p_land_id: id,
