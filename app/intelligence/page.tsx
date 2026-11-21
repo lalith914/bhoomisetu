@@ -50,42 +50,33 @@ type LandRecord = {
   asking_price?: string | null;
   latitude?: number | string | null;
   longitude?: number | string | null;
+  soil_description?: string | null;
+  water_description?: string | null;
+  terrain_description?: string | null;
+  vegetation_description?: string | null;
+  agriculture_description?: string | null;
 };
 
 function isValidCoordinatePair(lat: number | null, lng: number | null) {
   if (lat === null || lng === null) return false;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
-
-  // BhoomiSetu properties are in India.
-  // Treat 0,0 as missing parcel coordinates.
   if (lat === 0 && lng === 0) return false;
-
   return true;
 }
 
 function IntelligenceContent() {
   const params = useSearchParams();
-
   const parcel = params.get("parcel") || params.get("id") || "";
-
   const latValue = params.get("lat");
   const lngValue = params.get("lng");
 
   const parsedUrlLat =
-    latValue !== null && latValue.trim() !== ""
-      ? Number(latValue)
-      : null;
-
+    latValue !== null && latValue.trim() !== "" ? Number(latValue) : null;
   const parsedUrlLng =
-    lngValue !== null && lngValue.trim() !== ""
-      ? Number(lngValue)
-      : null;
+    lngValue !== null && lngValue.trim() !== "" ? Number(lngValue) : null;
 
-  const urlCoordinatesValid = isValidCoordinatePair(
-    parsedUrlLat,
-    parsedUrlLng
-  );
+  const urlCoordinatesValid = isValidCoordinatePair(parsedUrlLat, parsedUrlLng);
 
   const [year, setYear] = useState<number | null>(null);
   const [layer, setLayer] = useState("TRUE COLOR");
@@ -106,7 +97,6 @@ function IntelligenceContent() {
   const [landLoadError, setLandLoadError] = useState("");
   const [landFetched, setLandFetched] = useState(false);
 
-  // Fetch the selected property before starting satellite analysis.
   useEffect(() => {
     if (!parcel || parcel.length < 10) {
       setLandFetched(true);
@@ -127,34 +117,26 @@ function IntelligenceContent() {
     })
       .then(async (response) => {
         const result = await response.json();
-
         if (!response.ok) {
           throw new Error(result.error || "Land record unavailable");
         }
-
         return result;
       })
       .then((result) => {
         if (!active) return;
 
-        if (result.land) {
-          setLand(result.land);
-        }
+        if (result.land) setLand(result.land);
 
         setPropertyPhotos(
           Array.isArray(result.photos) ? result.photos : []
         );
 
-        if (result.geometry) {
-          setLandGeometry(result.geometry);
-        }
+        if (result.geometry) setLandGeometry(result.geometry);
       })
       .catch((err) => {
         if (active) {
           setLandLoadError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load land details."
+            err instanceof Error ? err.message : "Unable to load land details."
           );
         }
       })
@@ -170,8 +152,6 @@ function IntelligenceContent() {
     };
   }, [parcel]);
 
-  // Prefer valid coordinates from the URL.
-  // If the URL contains 0,0 or missing coordinates, use the saved land record.
   const savedLat =
     land?.latitude !== undefined && land?.latitude !== null
       ? Number(land.latitude)
@@ -182,10 +162,7 @@ function IntelligenceContent() {
       ? Number(land.longitude)
       : null;
 
-  const savedCoordinatesValid = isValidCoordinatePair(
-    savedLat,
-    savedLng
-  );
+  const savedCoordinatesValid = isValidCoordinatePair(savedLat, savedLng);
 
   const lat = urlCoordinatesValid
     ? parsedUrlLat
@@ -199,9 +176,9 @@ function IntelligenceContent() {
       ? savedLng
       : null;
 
-  // Run intelligence only after the land record has loaded.
   useEffect(() => {
     if (!landFetched) return;
+
     if (!isValidCoordinatePair(lat, lng)) {
       setScenes([]);
       setAnalysis(null);
@@ -221,9 +198,7 @@ function IntelligenceContent() {
 
     fetch("/api/intelligence", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reportId: parcel || `parcel-${lat}-${lng}`,
         lat,
@@ -234,13 +209,9 @@ function IntelligenceContent() {
     })
       .then(async (response) => {
         const data = await response.json();
-
         if (!response.ok) {
-          throw new Error(
-            data.error || "Unable to analyze this parcel."
-          );
+          throw new Error(data.error || "Unable to analyze this parcel.");
         }
-
         return data;
       })
       .then((data) => {
@@ -256,17 +227,13 @@ function IntelligenceContent() {
         );
 
         setYear(
-          Number.isFinite(firstYear) && firstYear > 0
-            ? firstYear
-            : null
+          Number.isFinite(firstYear) && firstYear > 0 ? firstYear : null
         );
       })
       .catch((err) => {
         if (active) {
           setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to analyze this parcel."
+            err instanceof Error ? err.message : "Unable to analyze this parcel."
           );
         }
       })
@@ -284,12 +251,8 @@ function IntelligenceContent() {
       Array.from(
         new Set(
           scenes
-            .map((scene) =>
-              Number(String(scene.date || "").slice(0, 4))
-            )
-            .filter(
-              (value) => Number.isFinite(value) && value > 0
-            )
+            .map((scene) => Number(String(scene.date || "").slice(0, 4)))
+            .filter((value) => Number.isFinite(value) && value > 0)
         )
       ).sort((a, b) => b - a),
     [scenes]
@@ -297,8 +260,7 @@ function IntelligenceContent() {
 
   const selectedScene =
     scenes.find(
-      (scene) =>
-        Number(String(scene.date || "").slice(0, 4)) === year
+      (scene) => Number(String(scene.date || "").slice(0, 4)) === year
     ) ||
     scenes[0] ||
     null;
@@ -313,9 +275,16 @@ function IntelligenceContent() {
     ["AGRICULTURE", analysis?.scores?.agriculture, analysis?.agriculture?.status || "UNAVAILABLE"],
   ] as const;
 
+  const ownerDescriptions = [
+    ["SOIL", land?.soil_description],
+    ["WATER", land?.water_description],
+    ["TERRAIN", land?.terrain_description],
+    ["VEGETATION", land?.vegetation_description],
+    ["AGRICULTURE", land?.agriculture_description],
+  ] as const;
+
   async function askLand() {
     const cleanQuestion = question.trim();
-
     if (!cleanQuestion || !analysis || asking) return;
 
     setAsking(true);
@@ -324,9 +293,7 @@ function IntelligenceContent() {
     try {
       const response = await fetch("/api/ask", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reportId: parcel || `parcel-${lat}-${lng}`,
           question: cleanQuestion,
@@ -335,17 +302,12 @@ function IntelligenceContent() {
       });
 
       const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "AI request failed.");
-      }
+      if (!response.ok) throw new Error(result.error || "AI request failed.");
 
       setAnswer(result.answer || "No answer returned.");
     } catch (error) {
       setAnswer(
-        error instanceof Error
-          ? error.message
-          : "AI request failed."
+        error instanceof Error ? error.message : "AI request failed."
       );
     } finally {
       setAsking(false);
@@ -361,9 +323,7 @@ function IntelligenceContent() {
 
         <nav>
           <Link href="/explore">EXPLORE</Link>
-          <Link className="active" href="/intelligence">
-            INTELLIGENCE
-          </Link>
+          <Link className="active" href="/intelligence">INTELLIGENCE</Link>
           <Link href="/about">ABOUT</Link>
         </nav>
 
@@ -393,12 +353,8 @@ function IntelligenceContent() {
 
         <div className="intel-coords">
           <span>WGS 84</span>
-          <b>
-            {lat !== null ? `${lat.toFixed(5)}° N` : "—"}
-          </b>
-          <b>
-            {lng !== null ? `${lng.toFixed(5)}° E` : "—"}
-          </b>
+          <b>{lat !== null ? `${lat.toFixed(5)}° N` : "—"}</b>
+          <b>{lng !== null ? `${lng.toFixed(5)}° E` : "—"}</b>
           <span>LIVE PARCEL ANALYSIS</span>
         </div>
       </section>
@@ -418,9 +374,9 @@ function IntelligenceContent() {
           <span>NO VALID PARCEL SELECTED</span>
           <h2>Start from the map.</h2>
           <p>
-            Select a property from Explore. If the selected property
-            has no saved coordinates, update its land record before
-            running satellite analysis.
+            Select a property from Explore. If the selected property has no
+            saved coordinates, update its land record before running satellite
+            analysis.
           </p>
           <Link href="/explore" className="console-action">
             OPEN EXPLORE <span>↗</span>
@@ -428,10 +384,8 @@ function IntelligenceContent() {
         </section>
       ) : !landLoading && lat !== null && lng !== null ? (
         <>
-          {/* PROPERTY LISTING DETAILS */}
           <section className="public-land-card">
             <span>PUBLIC LAND LISTING</span>
-
             <h2>{land?.title || parcel || "Selected land"}</h2>
 
             <div
@@ -440,9 +394,7 @@ function IntelligenceContent() {
                 margin: "12px 0 20px",
                 padding: "9px 14px",
                 background:
-                  land?.listing_type === "LEASE"
-                    ? "#d7c49a"
-                    : "#b8ff5a",
+                  land?.listing_type === "LEASE" ? "#d7c49a" : "#b8ff5a",
                 color: "#07100d",
                 fontSize: 10,
                 fontWeight: 700,
@@ -485,15 +437,12 @@ function IntelligenceContent() {
               {land?.listing_type === "LEASE" && (
                 <div>
                   <small>LEASE DURATION</small>
-                  <strong>
-                    {land.lease_duration || "Not specified"}
-                  </strong>
+                  <strong>{land.lease_duration || "Not specified"}</strong>
                 </div>
               )}
             </div>
           </section>
 
-          {/* OWNER-UPLOADED PROPERTY PHOTOS */}
           <section
             style={{
               padding: "42px 0",
@@ -507,10 +456,7 @@ function IntelligenceContent() {
                   See the <i>property.</i>
                 </h2>
               </div>
-
-              <p>
-                Actual photographs uploaded by the property owner.
-              </p>
+              <p>Actual photographs uploaded by the property owner.</p>
             </div>
 
             {landLoadError ? (
@@ -631,7 +577,6 @@ function IntelligenceContent() {
                 )}
 
                 <div className="scanline" />
-
                 <div className="crosshair">
                   <span />
                   <span />
@@ -649,27 +594,23 @@ function IntelligenceContent() {
               </div>
 
               <div className="layer-rail">
-                {[
-                  "TRUE COLOR",
-                  "NDVI",
-                  "NDWI",
-                  "NIR",
-                  "TERRAIN",
-                ].map((value) => (
-                  <button
-                    key={value}
-                    className={layer === value ? "selected" : ""}
-                    onClick={() => setLayer(value)}
-                  >
-                    {value}
-                  </button>
-                ))}
+                {["TRUE COLOR", "NDVI", "NDWI", "NIR", "TERRAIN"].map(
+                  (value) => (
+                    <button
+                      key={value}
+                      className={layer === value ? "selected" : ""}
+                      onClick={() => setLayer(value)}
+                    >
+                      {value}
+                    </button>
+                  )
+                )}
               </div>
 
               <div className="satellite-note">
-                True-color imagery is sourced from the selected
-                Sentinel-2 acquisition. Derived spectral layers
-                require the connected raster-processing provider.
+                True-color imagery is sourced from the selected Sentinel-2
+                acquisition. Derived spectral layers require the connected
+                raster-processing provider.
               </div>
             </div>
 
@@ -678,15 +619,14 @@ function IntelligenceContent() {
                 <span>LAND PROFILE</span>
                 <strong>{parcel || "SELECTED PARCEL"}</strong>
                 <small>
-                  {lat.toFixed(5)}° / {lng.toFixed(5)}° ·
-                  ELEVATION {elevation ?? "—"} M
+                  {lat.toFixed(5)}° / {lng.toFixed(5)}° · ELEVATION{" "}
+                  {elevation ?? "—"} M
                 </small>
               </div>
 
               <div className="score-readout">
                 <span>LAND INTELLIGENCE SCORE</span>
                 <b>{score ?? "—"}</b>
-
                 <div className="score-line">
                   <i
                     style={{
@@ -726,10 +666,9 @@ function IntelligenceContent() {
                 <span>03 / TEMPORAL ANALYSIS</span>
                 <h2>Land over time.</h2>
               </div>
-
               <p>
-                Historical Sentinel-2 acquisitions for the selected
-                parcel. Cloud cover is shown from the source metadata.
+                Historical Sentinel-2 acquisitions for the selected parcel.
+                Cloud cover is shown from the source metadata.
               </p>
             </div>
 
@@ -773,7 +712,6 @@ function IntelligenceContent() {
                 <span>SCENES FOUND</span>
                 <b>{scenes.length}</b>
               </div>
-
               <div>
                 <span>BEST CLOUD COVER</span>
                 <b>
@@ -784,12 +722,10 @@ function IntelligenceContent() {
                     : "—"}
                 </b>
               </div>
-
               <div>
                 <span>EARLIEST SCENE</span>
                 <b>{years.length ? Math.min(...years) : "—"}</b>
               </div>
-
               <div>
                 <span>CONFIDENCE</span>
                 <b>{analysis?.confidence ?? "—"}</b>
@@ -799,30 +735,21 @@ function IntelligenceContent() {
 
           <section className="analysis-grid">
             <div className="analysis-panel">
-              <span>04 / EVIDENCE</span>
+              <span>04 / OWNER-PROVIDED PROPERTY DETAILS</span>
               <h3>What the land says.</h3>
 
               <p>
-                {analysis?.summary ||
-                  "Waiting for the connected intelligence engine."}
+                The following descriptions were supplied by the property
+                owner. They are displayed as provided and have not been
+                independently verified by BhoomiSetu.
               </p>
 
               <div className="evidence-list">
-                {[
-                  ["SOIL", analysis?.soil],
-                  ["WATER", analysis?.water],
-                  ["TERRAIN", analysis?.terrain],
-                  ["VEGETATION", analysis?.vegetation],
-                  ["AGRICULTURE", analysis?.agriculture],
-                ].map(([name, item]) => (
-                  <div key={String(name)}>
-                    <strong>{String(name)}</strong>
-                    <span>
-                      {(item as any)?.evidence || "Unavailable"}
-                    </span>
-                    <small>
-                      {(item as any)?.limitations || ""}
-                    </small>
+                {ownerDescriptions.map(([name, value]) => (
+                  <div key={name}>
+                    <strong>{name}</strong>
+                    <span>{value?.trim() || "Not provided by owner"}</span>
+                    <small>OWNER-PROVIDED INFORMATION · NOT VERIFIED</small>
                   </div>
                 ))}
               </div>
@@ -847,9 +774,7 @@ function IntelligenceContent() {
 
                 <button
                   onClick={askLand}
-                  disabled={
-                    asking || !question.trim() || !analysis
-                  }
+                  disabled={asking || !question.trim() || !analysis}
                 >
                   {asking ? "THINKING..." : "ASK ↗"}
                 </button>
@@ -864,11 +789,8 @@ function IntelligenceContent() {
 
               <div className="risk-box">
                 <small>RISKS / LIMITATIONS</small>
-
                 {(analysis?.risks || []).length ? (
-                  analysis?.risks?.map((risk) => (
-                    <p key={risk}>{risk}</p>
-                  ))
+                  analysis?.risks?.map((risk) => <p key={risk}>{risk}</p>)
                 ) : (
                   <p>No AI risk list returned.</p>
                 )}
@@ -882,11 +804,10 @@ function IntelligenceContent() {
                 <span>06 / RECOMMENDED USE</span>
                 <h2>Use the evidence.</h2>
               </div>
-
               <p>
                 Recommendations are AI interpretations of the supplied
-                geospatial evidence, not a substitute for survey,
-                soil testing, title verification or professional advice.
+                geospatial evidence, not a substitute for survey, soil testing,
+                title verification or professional advice.
               </p>
             </div>
 
@@ -902,10 +823,9 @@ function IntelligenceContent() {
             <div className="data-provenance">
               <span>DATA PROVENANCE</span>
               <p>
-                Sentinel-2 discovery: Element84 Earth Search ·
-                Soil profile: configured SoilGrids-compatible provider ·
-                Elevation: Open-Meteo · Interpretation: configured
-                OpenAI model.
+                Sentinel-2 discovery: Element84 Earth Search · Soil profile:
+                configured SoilGrids-compatible provider · Elevation:
+                Open-Meteo · Interpretation: configured OpenAI model.
               </p>
             </div>
           </section>
