@@ -40,15 +40,52 @@ type Analysis = {
   confidence?: number;
 };
 
+type LandRecord = {
+  title?: string;
+  location?: string;
+  area?: string;
+  land_type?: string;
+  listing_type?: "SELL" | "LEASE";
+  lease_duration?: string | null;
+  asking_price?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+};
+
+function isValidCoordinatePair(lat: number | null, lng: number | null) {
+  if (lat === null || lng === null) return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+
+  // BhoomiSetu properties are in India.
+  // Treat 0,0 as missing parcel coordinates.
+  if (lat === 0 && lng === 0) return false;
+
+  return true;
+}
+
 function IntelligenceContent() {
   const params = useSearchParams();
 
-  const parcel = params.get("parcel") || "";
-  const latParam = Number(params.get("lat"));
-  const lngParam = Number(params.get("lng"));
+  const parcel = params.get("parcel") || params.get("id") || "";
 
-  const lat = Number.isFinite(latParam) ? latParam : null;
-  const lng = Number.isFinite(lngParam) ? lngParam : null;
+  const latValue = params.get("lat");
+  const lngValue = params.get("lng");
+
+  const parsedUrlLat =
+    latValue !== null && latValue.trim() !== ""
+      ? Number(latValue)
+      : null;
+
+  const parsedUrlLng =
+    lngValue !== null && lngValue.trim() !== ""
+      ? Number(lngValue)
+      : null;
+
+  const urlCoordinatesValid = isValidCoordinatePair(
+    parsedUrlLat,
+    parsedUrlLng
+  );
 
   const [year, setYear] = useState<number | null>(null);
   const [layer, setLayer] = useState("TRUE COLOR");
@@ -63,26 +100,27 @@ function IntelligenceContent() {
   const [asking, setAsking] = useState(false);
   const [landGeometry, setLandGeometry] = useState<any>(null);
 
-  const [land, setLand] = useState<{
-    title?: string;
-    location?: string;
-    area?: string;
-    land_type?: string;
-    listing_type?: "SELL" | "LEASE";
-    lease_duration?: string | null;
-    asking_price?: string | null;
-  } | null>(null);
-
+  const [land, setLand] = useState<LandRecord | null>(null);
   const [propertyPhotos, setPropertyPhotos] = useState<PropertyPhoto[]>([]);
   const [landLoading, setLandLoading] = useState(false);
   const [landLoadError, setLandLoadError] = useState("");
+  const [landFetched, setLandFetched] = useState(false);
 
+  // Fetch the selected property before starting satellite analysis.
   useEffect(() => {
-    if (!parcel || parcel.length < 20) return;
+    if (!parcel || parcel.length < 10) {
+      setLandFetched(true);
+      return;
+    }
 
     let active = true;
+
     setLandLoading(true);
+    setLandFetched(false);
     setLandLoadError("");
+    setLand(null);
+    setPropertyPhotos([]);
+    setLandGeometry(null);
 
     fetch(`/api/lands/${encodeURIComponent(parcel)}`, {
       cache: "no-store",
@@ -99,22 +137,32 @@ function IntelligenceContent() {
       .then((result) => {
         if (!active) return;
 
-        if (result.land) setLand(result.land);
+        if (result.land) {
+          setLand(result.land);
+        }
+
         setPropertyPhotos(
           Array.isArray(result.photos) ? result.photos : []
         );
 
-        if (result.geometry) setLandGeometry(result.geometry);
+        if (result.geometry) {
+          setLandGeometry(result.geometry);
+        }
       })
       .catch((err) => {
         if (active) {
           setLandLoadError(
-            err instanceof Error ? err.message : "Unable to load land details."
+            err instanceof Error
+              ? err.message
+              : "Unable to load land details."
           );
         }
       })
       .finally(() => {
-        if (active) setLandLoading(false);
+        if (active) {
+          setLandLoading(false);
+          setLandFetched(true);
+        }
       });
 
     return () => {
@@ -122,13 +170,54 @@ function IntelligenceContent() {
     };
   }, [parcel]);
 
+  // Prefer valid coordinates from the URL.
+  // If the URL contains 0,0 or missing coordinates, use the saved land record.
+  const savedLat =
+    land?.latitude !== undefined && land?.latitude !== null
+      ? Number(land.latitude)
+      : null;
+
+  const savedLng =
+    land?.longitude !== undefined && land?.longitude !== null
+      ? Number(land.longitude)
+      : null;
+
+  const savedCoordinatesValid = isValidCoordinatePair(
+    savedLat,
+    savedLng
+  );
+
+  const lat = urlCoordinatesValid
+    ? parsedUrlLat
+    : savedCoordinatesValid
+      ? savedLat
+      : null;
+
+  const lng = urlCoordinatesValid
+    ? parsedUrlLng
+    : savedCoordinatesValid
+      ? savedLng
+      : null;
+
+  // Run intelligence only after the land record has loaded.
   useEffect(() => {
-    if (lat === null || lng === null) return;
+    if (!landFetched) return;
+    if (!isValidCoordinatePair(lat, lng)) {
+      setScenes([]);
+      setAnalysis(null);
+      setError(
+        "This property does not have valid coordinates. Please update its latitude and longitude."
+      );
+      return;
+    }
 
     let active = true;
 
     setLoading(true);
     setError("");
+    setScenes([]);
+    setAnalysis(null);
+    setYear(null);
 
     fetch("/api/intelligence", {
       method: "POST",
@@ -147,7 +236,9 @@ function IntelligenceContent() {
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.error || "Unable to analyze this parcel.");
+          throw new Error(
+            data.error || "Unable to analyze this parcel."
+          );
         }
 
         return data;
@@ -186,15 +277,19 @@ function IntelligenceContent() {
     return () => {
       active = false;
     };
-  }, [lat, lng, landGeometry, parcel]);
+  }, [lat, lng, landGeometry, parcel, landFetched]);
 
   const years = useMemo(
     () =>
       Array.from(
         new Set(
           scenes
-            .map((scene) => Number(String(scene.date || "").slice(0, 4)))
-            .filter((value) => Number.isFinite(value) && value > 0)
+            .map((scene) =>
+              Number(String(scene.date || "").slice(0, 4))
+            )
+            .filter(
+              (value) => Number.isFinite(value) && value > 0
+            )
         )
       ).sort((a, b) => b - a),
     [scenes]
@@ -202,7 +297,8 @@ function IntelligenceContent() {
 
   const selectedScene =
     scenes.find(
-      (scene) => Number(String(scene.date || "").slice(0, 4)) === year
+      (scene) =>
+        Number(String(scene.date || "").slice(0, 4)) === year
     ) ||
     scenes[0] ||
     null;
@@ -247,7 +343,9 @@ function IntelligenceContent() {
       setAnswer(result.answer || "No answer returned.");
     } catch (error) {
       setAnswer(
-        error instanceof Error ? error.message : "AI request failed."
+        error instanceof Error
+          ? error.message
+          : "AI request failed."
       );
     } finally {
       setAsking(false);
@@ -295,26 +393,40 @@ function IntelligenceContent() {
 
         <div className="intel-coords">
           <span>WGS 84</span>
-          <b>{lat !== null ? `${lat.toFixed(5)}° N` : "—"}</b>
-          <b>{lng !== null ? `${lng.toFixed(5)}° E` : "—"}</b>
+          <b>
+            {lat !== null ? `${lat.toFixed(5)}° N` : "—"}
+          </b>
+          <b>
+            {lng !== null ? `${lng.toFixed(5)}° E` : "—"}
+          </b>
           <span>LIVE PARCEL ANALYSIS</span>
         </div>
       </section>
 
-      {lat === null || lng === null ? (
+      {landLoading && (
         <section className="intel-empty-state">
-          <span>NO PARCEL SELECTED</span>
+          <span>LOADING PROPERTY</span>
+          <h2>Retrieving land details.</h2>
+          <p>
+            Loading the selected property and its owner-uploaded photographs.
+          </p>
+        </section>
+      )}
+
+      {!landLoading && (lat === null || lng === null) ? (
+        <section className="intel-empty-state">
+          <span>NO VALID PARCEL SELECTED</span>
           <h2>Start from the map.</h2>
           <p>
-            Select a land parcel in Explore. BhoomiSetu will use
-            that location to search Sentinel-2 imagery and run
-            the connected geospatial intelligence pipeline.
+            Select a property from Explore. If the selected property
+            has no saved coordinates, update its land record before
+            running satellite analysis.
           </p>
           <Link href="/explore" className="console-action">
             OPEN EXPLORE <span>↗</span>
           </Link>
         </section>
-      ) : (
+      ) : !landLoading && lat !== null && lng !== null ? (
         <>
           {/* PROPERTY LISTING DETAILS */}
           <section className="public-land-card">
@@ -328,14 +440,18 @@ function IntelligenceContent() {
                 margin: "12px 0 20px",
                 padding: "9px 14px",
                 background:
-                  land?.listing_type === "LEASE" ? "#d7c49a" : "#b8ff5a",
+                  land?.listing_type === "LEASE"
+                    ? "#d7c49a"
+                    : "#b8ff5a",
                 color: "#07100d",
                 fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: ".12em",
               }}
             >
-              {land?.listing_type === "LEASE" ? "AVAILABLE FOR LEASE" : "AVAILABLE FOR SALE"}
+              {land?.listing_type === "LEASE"
+                ? "AVAILABLE FOR LEASE"
+                : "AVAILABLE FOR SALE"}
             </div>
 
             <div className="public-land-facts">
@@ -354,7 +470,9 @@ function IntelligenceContent() {
 
               <div>
                 <small>
-                  {land?.listing_type === "LEASE" ? "LEASE AMOUNT" : "ASKING PRICE"}
+                  {land?.listing_type === "LEASE"
+                    ? "LEASE AMOUNT"
+                    : "ASKING PRICE"}
                 </small>
                 <strong>{land?.asking_price || "ON REQUEST"}</strong>
               </div>
@@ -367,7 +485,9 @@ function IntelligenceContent() {
               {land?.listing_type === "LEASE" && (
                 <div>
                   <small>LEASE DURATION</small>
-                  <strong>{land.lease_duration || "Not specified"}</strong>
+                  <strong>
+                    {land.lease_duration || "Not specified"}
+                  </strong>
                 </div>
               )}
             </div>
@@ -383,7 +503,9 @@ function IntelligenceContent() {
             <div className="section-heading">
               <div>
                 <span>PROPERTY / OWNER PHOTOGRAPHS</span>
-                <h2>See the <i>property.</i></h2>
+                <h2>
+                  See the <i>property.</i>
+                </h2>
               </div>
 
               <p>
@@ -391,11 +513,7 @@ function IntelligenceContent() {
               </p>
             </div>
 
-            {landLoading ? (
-              <p style={{ color: "#a8b3a9", padding: "20px 0" }}>
-                LOADING PROPERTY PHOTOS...
-              </p>
-            ) : landLoadError ? (
+            {landLoadError ? (
               <p style={{ color: "#ff9c8e", padding: "20px 0" }}>
                 {landLoadError}
               </p>
@@ -403,7 +521,8 @@ function IntelligenceContent() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill,minmax(min(100%,260px),1fr))",
+                  gridTemplateColumns:
+                    "repeat(auto-fill,minmax(min(100%,260px),1fr))",
                   gap: 16,
                   marginTop: 24,
                 }}
@@ -475,7 +594,10 @@ function IntelligenceContent() {
             <section className="intel-error">
               <span>INTELLIGENCE ENGINE</span>
               <strong>{error}</strong>
-              <p>Check your satellite/AI provider keys and try again.</p>
+              <p>
+                Check the parcel coordinates and satellite/AI provider
+                configuration, then try again.
+              </p>
             </section>
           )}
 
@@ -695,8 +817,12 @@ function IntelligenceContent() {
                 ].map(([name, item]) => (
                   <div key={String(name)}>
                     <strong>{String(name)}</strong>
-                    <span>{(item as any)?.evidence || "Unavailable"}</span>
-                    <small>{(item as any)?.limitations || ""}</small>
+                    <span>
+                      {(item as any)?.evidence || "Unavailable"}
+                    </span>
+                    <small>
+                      {(item as any)?.limitations || ""}
+                    </small>
                   </div>
                 ))}
               </div>
@@ -721,7 +847,9 @@ function IntelligenceContent() {
 
                 <button
                   onClick={askLand}
-                  disabled={asking || !question.trim() || !analysis}
+                  disabled={
+                    asking || !question.trim() || !analysis
+                  }
                 >
                   {asking ? "THINKING..." : "ASK ↗"}
                 </button>
@@ -782,7 +910,7 @@ function IntelligenceContent() {
             </div>
           </section>
         </>
-      )}
+      ) : null}
 
       <footer className="console-footer">
         <span>BHOOMISETU / LAND INTELLIGENCE SYSTEM</span>
