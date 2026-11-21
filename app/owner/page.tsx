@@ -18,19 +18,31 @@ export default function OwnerPage() {
   const [location, setLocation] = useState("");
   const [area, setArea] = useState("");
   const [landType, setLandType] = useState("AGRICULTURAL");
+
   const [listingType, setListingType] = useState<ListingType>("SELL");
   const [price, setPrice] = useState("");
   const [leaseDuration, setLeaseDuration] = useState("");
   const [description, setDescription] = useState("");
+
+  // Owner-provided land condition information.
+  const [soilDescription, setSoilDescription] = useState("");
+  const [waterDescription, setWaterDescription] = useState("");
+  const [terrainDescription, setTerrainDescription] = useState("");
+  const [vegetationDescription, setVegetationDescription] = useState("");
+  const [agricultureDescription, setAgricultureDescription] = useState("");
+
   const [surveyNumber, setSurveyNumber] = useState("");
   const [surveySource, setSurveySource] = useState<
     "OWNER_PROVIDED" | "CADASTRAL_API"
   >("OWNER_PROVIDED");
+
   const [surveyLookup, setSurveyLookup] = useState(false);
   const [surveyLookupMessage, setSurveyLookupMessage] = useState("");
   const [cadastralReference, setCadastralReference] = useState("");
+
   const [propertyPhotos, setPropertyPhotos] = useState<File[]>([]);
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
+
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
 
@@ -56,9 +68,7 @@ export default function OwnerPage() {
     const sb = getSupabase();
 
     if (!sb) {
-      setError(
-        "Supabase is not configured. Check your .env.local file."
-      );
+      setError("Supabase is not configured. Check your environment variables.");
       return;
     }
 
@@ -78,10 +88,10 @@ export default function OwnerPage() {
   }, [router]);
 
   const parsedLocation =
-    Number.isFinite(Number(latitude)) &&
-    Number.isFinite(Number(longitude)) &&
     latitude.trim() !== "" &&
     longitude.trim() !== "" &&
+    Number.isFinite(Number(latitude)) &&
+    Number.isFinite(Number(longitude)) &&
     Math.abs(Number(latitude)) <= 90 &&
     Math.abs(Number(longitude)) <= 180
       ? {
@@ -118,9 +128,7 @@ export default function OwnerPage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          result?.error || "Survey lookup failed."
-        );
+        throw new Error(result?.error || "Survey lookup failed.");
       }
 
       if (result.status === "not_configured") {
@@ -155,9 +163,7 @@ export default function OwnerPage() {
     }
   }
 
-  async function handleSubmit(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setError("");
@@ -172,10 +178,7 @@ export default function OwnerPage() {
       return;
     }
 
-    if (
-      listingType === "LEASE" &&
-      !leaseDuration.trim()
-    ) {
+    if (listingType === "LEASE" && !leaseDuration.trim()) {
       setError("Please enter the lease duration.");
       return;
     }
@@ -190,18 +193,14 @@ export default function OwnerPage() {
     const coordinates = boundary.geometry.coordinates[0];
 
     if (!coordinates || coordinates.length < 4) {
-      setError(
-        "The boundary is incomplete. Please draw the property again."
-      );
+      setError("The boundary is incomplete. Please draw it again.");
       return;
     }
 
     const sb = getSupabase();
 
     if (!sb) {
-      setError(
-        "Supabase is not configured. Check your .env.local file."
-      );
+      setError("Supabase is not configured.");
       return;
     }
 
@@ -214,7 +213,7 @@ export default function OwnerPage() {
 
       if (!user) {
         throw new Error(
-          "Your Supabase session expired. Please sign in again before submitting the property."
+          "Your session expired. Please sign in again."
         );
       }
 
@@ -224,14 +223,12 @@ export default function OwnerPage() {
 
       const polygonWKT = `POLYGON((${polygonCoordinates}))`;
 
-      // Prefer manually entered coordinates.
-      // Otherwise calculate the centre of the drawn boundary.
       const validManualCoordinates =
         parsedLocation !== null &&
         !(parsedLocation.lat === 0 && parsedLocation.lng === 0);
 
-      // The last polygon coordinate repeats the first point.
-      // Exclude it when calculating the centre.
+      // Calculate the centre of the drawn boundary if coordinates
+      // were not manually entered.
       const boundaryPoints = coordinates.slice(0, -1);
 
       if (boundaryPoints.length < 3) {
@@ -242,17 +239,13 @@ export default function OwnerPage() {
 
       const landLongitude = validManualCoordinates
         ? parsedLocation.lng
-        : boundaryPoints.reduce(
-            (sum, point) => sum + point[0],
-            0
-          ) / boundaryPoints.length;
+        : boundaryPoints.reduce((sum, point) => sum + point[0], 0) /
+          boundaryPoints.length;
 
       const landLatitude = validManualCoordinates
         ? parsedLocation.lat
-        : boundaryPoints.reduce(
-            (sum, point) => sum + point[1],
-            0
-          ) / boundaryPoints.length;
+        : boundaryPoints.reduce((sum, point) => sum + point[1], 0) /
+          boundaryPoints.length;
 
       if (
         !Number.isFinite(landLatitude) ||
@@ -264,11 +257,11 @@ export default function OwnerPage() {
         (landLatitude === 0 && landLongitude === 0)
       ) {
         throw new Error(
-          "Unable to determine valid property coordinates. Enter the latitude and longitude or redraw the boundary."
+          "Unable to determine valid property coordinates."
         );
       }
 
-      // Create the land record.
+      // Create the property record.
       const { data: land, error: landError } = await sb
         .from("lands")
         .insert({
@@ -276,33 +269,43 @@ export default function OwnerPage() {
           location: location.trim(),
           area: area.trim(),
           land_type: landType,
+
           listing_type: listingType,
           lease_duration:
             listingType === "LEASE"
               ? leaseDuration.trim()
               : null,
+
           latitude: landLatitude,
           longitude: landLongitude,
+
           verified: false,
           verification_level: "PENDING",
           owner_id: user.id,
+
           survey_number: surveyNumber.trim() || null,
           survey_source: surveyNumber.trim()
             ? surveySource
             : null,
-          survey_verified:
-            surveySource === "CADASTRAL_API",
-          cadastral_reference:
-            cadastralReference.trim() || null,
+          survey_verified: surveySource === "CADASTRAL_API",
+          cadastral_reference: cadastralReference.trim() || null,
+
           asking_price: price.trim(),
           description: description.trim() || null,
+
+          // Owner-provided land condition information.
+          soil_description: soilDescription.trim() || null,
+          water_description: waterDescription.trim() || null,
+          terrain_description: terrainDescription.trim() || null,
+          vegetation_description: vegetationDescription.trim() || null,
+          agriculture_description: agricultureDescription.trim() || null,
         })
         .select("id")
         .single();
 
       if (landError) throw landError;
 
-      // Save the property boundary.
+      // Save the exact property boundary.
       const { error: boundaryError } = await sb.rpc(
         "save_land_boundary",
         {
@@ -313,7 +316,7 @@ export default function OwnerPage() {
 
       if (boundaryError) throw boundaryError;
 
-      // Upload owner photographs.
+      // Upload property photographs.
       if (propertyPhotos.length > 0) {
         const uploadedPhotos: {
           storage_path: string;
@@ -356,25 +359,23 @@ export default function OwnerPage() {
           });
         }
 
-        if (uploadedPhotos.length > 0) {
-          const { error: photoRowError } = await sb
-            .from("land_photos")
-            .insert(
-              uploadedPhotos.map((photo) => ({
-                ...photo,
-                land_id: land.id,
-              }))
-            );
+        const { error: photoRowError } = await sb
+          .from("land_photos")
+          .insert(
+            uploadedPhotos.map((photo) => ({
+              ...photo,
+              land_id: land.id,
+            }))
+          );
 
-          if (photoRowError) throw photoRowError;
-        }
+        if (photoRowError) throw photoRowError;
       }
 
       setMessage(
         "Land submitted successfully. It is now pending verification."
       );
 
-      // Reset the form after successful submission.
+      // Reset the form.
       setTitle("");
       setLocation("");
       setArea("");
@@ -383,23 +384,28 @@ export default function OwnerPage() {
       setPrice("");
       setLeaseDuration("");
       setDescription("");
+
+      setSoilDescription("");
+      setWaterDescription("");
+      setTerrainDescription("");
+      setVegetationDescription("");
+      setAgricultureDescription("");
+
       setSurveyNumber("");
+      setSurveySource("OWNER_PROVIDED");
       setCadastralReference("");
       setSurveyLookupMessage("");
+
       setLatitude("");
       setLongitude("");
       setBoundary(null);
       setPropertyPhotos([]);
       setPhotoPreviews([]);
     } catch (submitError: any) {
-      console.error(
-        "Owner submission error:",
-        submitError
-      );
+      console.error("Owner submission error:", submitError);
 
       setError(
-        submitError?.message ||
-          "Unable to submit the property."
+        submitError?.message || "Unable to submit the property."
       );
     } finally {
       setSaving(false);
@@ -435,8 +441,8 @@ export default function OwnerPage() {
           </h1>
 
           <p>
-            Add your property, define its exact boundary and submit it
-            for BhoomiSetu verification.
+            Add your property, describe its condition, define its
+            exact boundary and submit it for BhoomiSetu verification.
           </p>
         </div>
 
@@ -448,9 +454,7 @@ export default function OwnerPage() {
               PROPERTY TITLE
               <input
                 value={title}
-                onChange={(event) =>
-                  setTitle(event.target.value)
-                }
+                onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Green Valley Estate"
                 required
               />
@@ -460,9 +464,7 @@ export default function OwnerPage() {
               LOCATION
               <input
                 value={location}
-                onChange={(event) =>
-                  setLocation(event.target.value)
-                }
+                onChange={(e) => setLocation(e.target.value)}
                 placeholder="Village, District, State"
                 required
               />
@@ -473,9 +475,7 @@ export default function OwnerPage() {
                 AREA
                 <input
                   value={area}
-                  onChange={(event) =>
-                    setArea(event.target.value)
-                  }
+                  onChange={(e) => setArea(e.target.value)}
                   placeholder="e.g. 12.4 acres"
                   required
                 />
@@ -485,33 +485,18 @@ export default function OwnerPage() {
                 LAND TYPE
                 <select
                   value={landType}
-                  onChange={(event) =>
-                    setLandType(event.target.value)
-                  }
+                  onChange={(e) => setLandType(e.target.value)}
                 >
-                  <option value="AGRICULTURAL">
-                    AGRICULTURAL
-                  </option>
-                  <option value="RESIDENTIAL">
-                    RESIDENTIAL
-                  </option>
-                  <option value="COMMERCIAL">
-                    COMMERCIAL
-                  </option>
-                  <option value="INDUSTRIAL">
-                    INDUSTRIAL
-                  </option>
+                  <option value="AGRICULTURAL">AGRICULTURAL</option>
+                  <option value="RESIDENTIAL">RESIDENTIAL</option>
+                  <option value="COMMERCIAL">COMMERCIAL</option>
+                  <option value="INDUSTRIAL">INDUSTRIAL</option>
                 </select>
               </label>
             </div>
 
             <div style={{ marginTop: 24 }}>
-              <span
-                style={{
-                  display: "block",
-                  marginBottom: 12,
-                }}
-              >
+              <span style={{ display: "block", marginBottom: 12 }}>
                 LISTING TYPE
               </span>
 
@@ -525,8 +510,7 @@ export default function OwnerPage() {
                     setLeaseDuration("");
                   }}
                   style={{
-                    opacity:
-                      listingType === "SELL" ? 1 : 0.5,
+                    opacity: listingType === "SELL" ? 1 : 0.5,
                     border:
                       listingType === "SELL"
                         ? "2px solid #b8ff5a"
@@ -540,12 +524,9 @@ export default function OwnerPage() {
                   type="button"
                   className="owner-submit"
                   aria-pressed={listingType === "LEASE"}
-                  onClick={() =>
-                    setListingType("LEASE")
-                  }
+                  onClick={() => setListingType("LEASE")}
                   style={{
-                    opacity:
-                      listingType === "LEASE" ? 1 : 0.5,
+                    opacity: listingType === "LEASE" ? 1 : 0.5,
                     border:
                       listingType === "LEASE"
                         ? "2px solid #b8ff5a"
@@ -561,12 +542,9 @@ export default function OwnerPage() {
               {listingType === "SELL"
                 ? "EXPECTED SELLING PRICE"
                 : "EXPECTED LEASE AMOUNT"}
-
               <input
                 value={price}
-                onChange={(event) =>
-                  setPrice(event.target.value)
-                }
+                onChange={(e) => setPrice(e.target.value)}
                 placeholder={
                   listingType === "SELL"
                     ? "e.g. ₹2.5 Cr"
@@ -581,9 +559,7 @@ export default function OwnerPage() {
                 LEASE DURATION
                 <input
                   value={leaseDuration}
-                  onChange={(event) =>
-                    setLeaseDuration(event.target.value)
-                  }
+                  onChange={(e) => setLeaseDuration(e.target.value)}
                   placeholder="e.g. 11 months, 3 years"
                   required
                 />
@@ -594,8 +570,8 @@ export default function OwnerPage() {
               SURVEY NUMBER
               <input
                 value={surveyNumber}
-                onChange={(event) => {
-                  setSurveyNumber(event.target.value);
+                onChange={(e) => {
+                  setSurveyNumber(e.target.value);
                   setSurveySource("OWNER_PROVIDED");
                   setCadastralReference("");
                   setSurveyLookupMessage("");
@@ -632,9 +608,7 @@ export default function OwnerPage() {
                 LATITUDE
                 <input
                   value={latitude}
-                  onChange={(event) =>
-                    setLatitude(event.target.value)
-                  }
+                  onChange={(e) => setLatitude(e.target.value)}
                   placeholder="12.2958"
                   inputMode="decimal"
                 />
@@ -644,9 +618,7 @@ export default function OwnerPage() {
                 LONGITUDE
                 <input
                   value={longitude}
-                  onChange={(event) =>
-                    setLongitude(event.target.value)
-                  }
+                  onChange={(e) => setLongitude(e.target.value)}
                   placeholder="76.6394"
                   inputMode="decimal"
                 />
@@ -662,17 +634,76 @@ export default function OwnerPage() {
               DESCRIPTION
               <textarea
                 value={description}
-                onChange={(event) =>
-                  setDescription(event.target.value)
-                }
+                onChange={(e) => setDescription(e.target.value)}
                 placeholder="Tell buyers about the property..."
                 rows={5}
               />
             </label>
           </div>
 
+          {/* OWNER-ENTERED LAND CONDITION INFORMATION */}
           <div className="owner-form-section">
-            <span>02 / EXACT LAND BOUNDARY</span>
+            <span>02 / LAND CONDITION DETAILS</span>
+
+            <p className="owner-map-instruction">
+              Describe your property based on what you know.
+              These details will be displayed as owner-provided
+              information and are not automatically verified.
+            </p>
+
+            <label>
+              SOIL INFORMATION
+              <textarea
+                value={soilDescription}
+                onChange={(e) => setSoilDescription(e.target.value)}
+                placeholder="Example: Red soil, black soil, sandy soil, fertile or dry soil..."
+                rows={3}
+              />
+            </label>
+
+            <label>
+              WATER AVAILABILITY
+              <textarea
+                value={waterDescription}
+                onChange={(e) => setWaterDescription(e.target.value)}
+                placeholder="Example: Borewell, open well, lake nearby, irrigation availability..."
+                rows={3}
+              />
+            </label>
+
+            <label>
+              TERRAIN CONDITION
+              <textarea
+                value={terrainDescription}
+                onChange={(e) => setTerrainDescription(e.target.value)}
+                placeholder="Example: Flat land, sloping land, rocky or uneven terrain..."
+                rows={3}
+              />
+            </label>
+
+            <label>
+              VEGETATION DETAILS
+              <textarea
+                value={vegetationDescription}
+                onChange={(e) => setVegetationDescription(e.target.value)}
+                placeholder="Example: Coconut trees, mango trees, grass, existing crops..."
+                rows={3}
+              />
+            </label>
+
+            <label>
+              AGRICULTURAL DETAILS
+              <textarea
+                value={agricultureDescription}
+                onChange={(e) => setAgricultureDescription(e.target.value)}
+                placeholder="Example: Currently growing ragi, paddy, vegetables or suitable for farming..."
+                rows={3}
+              />
+            </label>
+          </div>
+
+          <div className="owner-form-section">
+            <span>03 / EXACT LAND BOUNDARY</span>
 
             <p className="owner-map-instruction">
               Use the polygon tool on the map to trace the actual
@@ -700,7 +731,7 @@ export default function OwnerPage() {
           </div>
 
           <div className="owner-form-section">
-            <span>03 / PROPERTY PHOTOS</span>
+            <span>04 / PROPERTY PHOTOS</span>
 
             <p className="owner-map-instruction">
               Add clear photos of the property. They are attached
@@ -719,9 +750,14 @@ export default function OwnerPage() {
                   );
 
                   const valid = incoming.filter(
-                    (file) =>
-                      file.size <= 8 * 1024 * 1024
+                    (file) => file.size <= 8 * 1024 * 1024
                   );
+
+                  if (valid.length !== incoming.length) {
+                    setError(
+                      "Some photos were skipped because they exceed 8 MB."
+                    );
+                  }
 
                   setPropertyPhotos((current) =>
                     [...current, ...valid].slice(0, 15)
@@ -762,9 +798,7 @@ export default function OwnerPage() {
                       type="button"
                       onClick={() =>
                         setPropertyPhotos((current) =>
-                          current.filter(
-                            (_, i) => i !== index
-                          )
+                          current.filter((_, i) => i !== index)
                         )
                       }
                       style={{
