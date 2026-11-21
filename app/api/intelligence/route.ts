@@ -13,39 +13,81 @@ const ELEVATION =
   process.env.BHOOMISETU_ELEVATION_URL ||
   "https://api.open-meteo.com/v1/elevation";
 
-function finiteNumber(value: unknown) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+function finiteNumber(value: unknown): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ""
+  ) {
+    return null;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normaliseGeometry(input: any): any | null {
+  if (!input) return null;
+
+  if (input.type === "Feature") {
+    return input.geometry || null;
+  }
+
+  if (input.type === "FeatureCollection") {
+    return input.features?.[0]?.geometry || null;
+  }
+
+  if (
+    input.type === "Polygon" ||
+    input.type === "MultiPolygon"
+  ) {
+    return input;
+  }
+
+  return null;
 }
 
 function centroidFromGeometry(geometry: any) {
-  const coords = geometry?.coordinates;
+  const normalised = normaliseGeometry(geometry);
+  const coords = normalised?.coordinates;
+
   if (!coords) return null;
 
   const ring =
-    geometry.type === "Polygon"
+    normalised.type === "Polygon"
       ? coords[0]
-      : geometry.type === "MultiPolygon"
+      : normalised.type === "MultiPolygon"
         ? coords[0]?.[0]
         : null;
 
-  if (!Array.isArray(ring) || !ring.length) return null;
+  if (!Array.isArray(ring) || ring.length < 3) {
+    return null;
+  }
+
+  // Ignore the repeated closing point of the polygon.
+  const points =
+    ring.length > 3 &&
+    ring[0][0] === ring[ring.length - 1][0] &&
+    ring[0][1] === ring[ring.length - 1][1]
+      ? ring.slice(0, -1)
+      : ring;
 
   let lng = 0;
   let lat = 0;
 
-  for (const point of ring) {
+  for (const point of points) {
     lng += Number(point[0]);
     lat += Number(point[1]);
   }
 
   return {
-    lat: lat / ring.length,
-    lng: lng / ring.length,
+    lat: lat / points.length,
+    lng: lng / points.length,
   };
 }
 
 function bboxFromGeometry(geometry: any) {
+  const normalised = normaliseGeometry(geometry);
   const points: number[][] = [];
 
   const walk = (value: any) => {
@@ -59,15 +101,17 @@ function bboxFromGeometry(geometry: any) {
       return;
     }
 
-    if (Array.isArray(value)) value.forEach(walk);
+    if (Array.isArray(value)) {
+      value.forEach(walk);
+    }
   };
 
-  walk(geometry?.coordinates);
+  walk(normalised?.coordinates);
 
   if (!points.length) return null;
 
-  const lngs = points.map((p) => p[0]);
-  const lats = points.map((p) => p[1]);
+  const lngs = points.map((point) => point[0]);
+  const lats = points.map((point) => point[1]);
 
   return [
     Math.min(...lngs),
@@ -77,40 +121,43 @@ function bboxFromGeometry(geometry: any) {
   ];
 }
 
-async function searchSatellite(
-  geometry: any,
-  lat: number,
-  lng: number
-) {
-  const bbox =
-    bboxFromGeometry(geometry) ||
-    [lng - 0.02, lat - 0.02, lng + 0.02, lat + 0.02];
+function expandBbox(
+  bbox: number[],
+  factor = 0.25
+): number[] {
+  const [minLng, minLat, maxLng, maxLat] = bbox;
 
-  const now = new Date();
-
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear() - 5, 0, 1)
+  const lngPadding = Math.max(
+    (maxLng - minLng) * factor,
+    0.01
   );
 
-  const body = {
-    collections: ["sentinel-2-l2a"],
-    intersects: geometry || undefined,
-    bbox: geometry ? undefined : bbox,
-    datetime: `${start.toISOString()}/${now.toISOString()}`,
-    limit: 12,
-    query: {
-      "eo:cloud_cover": {
-        lt: 25,
-      },
-    },
-    sortby: [
-      {
-        field: "properties.datetime",
-        direction: "desc",
-      },
-    ],
-  };
+  const latPadding = Math.max(
+    (maxLat - minLat) * factor,
+    0.01
+  );
 
+  return [
+    Math.max(-180, minLng - lngPadding),
+    Math.max(-90, minLat - latPadding),
+    Math.min(180, maxLng + lngPadding),
+    Math.min(90, maxLat + latPadding),
+  ];
+}
+
+function validCoordinates(lat: number, lng: number) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180 &&
+    !(lat === 0 && lng === 0)
+  );
+}
+
+async function earthSearch(body: Record<string, any>) {
   const response = await fetch(EARTH_SEARCH, {
     method: "POST",
     headers: {
@@ -122,29 +169,147 @@ async function searchSatellite(
   });
 
   if (!response.ok) {
-    throw new Error(`Earth Search returned ${response.status}`);
+    const details = await response.text();
+
+    throw new Error(
+      `Earth Search returned ${response.status}: ${details.slice(0, 300)}`
+    );
   }
 
-  const data = await response.json();
+  return response.json();
+}
 
-  const scenes = Array.isArray(data.features)
-    ? data.features.map((item: any) => ({
-        id: item.id,
-        date: item.properties?.datetime || null,
-        cloudCover: Number(
-          item.properties?.["eo:cloud_cover"] ?? 0
-        ),
-        platform: item.properties?.platform || "Sentinel-2",
-        thumbnail: item.assets?.thumbnail?.href || null,
-        visual: item.assets?.visual?.href || null,
-        red: item.assets?.red?.href || null,
-        green: item.assets?.green?.href || null,
-        blue: item.assets?.blue?.href || null,
-        nir: item.assets?.nir?.href || null,
-      }))
-    : [];
+async function searchSatellite(
+  geometry: any,
+  lat: number,
+  lng: number
+) {
+  const now = new Date();
 
-  return scenes;
+  // Search the previous five years.
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear() - 5, 0, 1)
+  );
+
+  const datetime =
+    `${start.toISOString()}/${now.toISOString()}`;
+
+  const baseBody = {
+    collections: ["sentinel-2-l2a"],
+    datetime,
+    limit: 30,
+    query: {
+      "eo:cloud_cover": {
+        lt: 80,
+      },
+    },
+    sortby: [
+      {
+        field: "properties.datetime",
+        direction: "desc",
+      },
+    ],
+  };
+
+  const normalised = normaliseGeometry(geometry);
+  const bbox = bboxFromGeometry(normalised);
+
+  const searches: {
+    name: string;
+    body: Record<string, any>;
+  }[] = [];
+
+  // Attempt 1: exact property boundary.
+  if (normalised) {
+    searches.push({
+      name: "EXACT PROPERTY BOUNDARY",
+      body: {
+        ...baseBody,
+        intersects: normalised,
+      },
+    });
+  }
+
+  // Attempt 2: expanded property bounding box.
+  if (bbox) {
+    searches.push({
+      name: "EXPANDED PROPERTY AREA",
+      body: {
+        ...baseBody,
+        bbox: expandBbox(bbox),
+      },
+    });
+  }
+
+  // Attempt 3: coordinate-based search.
+  searches.push({
+    name: "COORDINATE SEARCH",
+    body: {
+      ...baseBody,
+      bbox: [
+        Math.max(-180, lng - 0.05),
+        Math.max(-90, lat - 0.05),
+        Math.min(180, lng + 0.05),
+        Math.min(90, lat + 0.05),
+      ],
+    },
+  });
+
+  let lastError = "";
+
+  for (const search of searches) {
+    try {
+      console.log(
+        `BhoomiSetu satellite search: ${search.name}`
+      );
+
+      const data = await earthSearch(search.body);
+
+      const scenes = Array.isArray(data.features)
+        ? data.features.map((item: any) => ({
+            id: item.id,
+            date: item.properties?.datetime || null,
+            cloudCover: Number(
+              item.properties?.["eo:cloud_cover"] ?? 0
+            ),
+            platform:
+              item.properties?.platform || "Sentinel-2",
+            thumbnail:
+              item.assets?.thumbnail?.href || null,
+            visual:
+              item.assets?.visual?.href || null,
+            red: item.assets?.red?.href || null,
+            green: item.assets?.green?.href || null,
+            blue: item.assets?.blue?.href || null,
+            nir: item.assets?.nir?.href || null,
+          }))
+        : [];
+
+      if (scenes.length > 0) {
+        console.log(
+          `BhoomiSetu found ${scenes.length} Sentinel-2 scenes using ${search.name}`
+        );
+
+        return scenes;
+      }
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : "Satellite search failed.";
+
+      console.warn(
+        `BhoomiSetu ${search.name} failed:`,
+        lastError
+      );
+    }
+  }
+
+  if (lastError) {
+    console.warn("All satellite search attempts completed.");
+  }
+
+  return [];
 }
 
 async function fetchSoil(lat: number, lng: number) {
@@ -181,13 +346,18 @@ async function fetchSoil(lat: number, lng: number) {
   );
 
   if (!response.ok) {
-    throw new Error(`Soil provider returned ${response.status}`);
+    throw new Error(
+      `Soil provider returned ${response.status}`
+    );
   }
 
   return response.json();
 }
 
-async function fetchElevation(lat: number, lng: number) {
+async function fetchElevation(
+  lat: number,
+  lng: number
+) {
   const url = new URL(ELEVATION);
 
   url.searchParams.set("latitude", String(lat));
@@ -218,7 +388,7 @@ function flattenSoil(data: any) {
 
     const depth =
       layer.depths?.find(
-        (d: any) => d.label === "0-30cm"
+        (item: any) => item.label === "0-30cm"
       ) || layer.depths?.[0];
 
     if (!depth) continue;
@@ -327,7 +497,6 @@ async function askGeospatialAi(input: {
   return data?.analysis || data;
 }
 
-
 async function askGemini(input: {
   scene: any;
   soil: any;
@@ -338,7 +507,9 @@ async function askGemini(input: {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not configured.");
+    throw new Error(
+      "GEMINI_API_KEY is not configured."
+    );
   }
 
   const prompt = `
@@ -407,14 +578,19 @@ ${JSON.stringify(input.raster)}
 
   if (!response.ok) {
     throw new Error(
-      data?.error?.message || "Gemini analysis failed."
+      data?.error?.message ||
+        "Gemini analysis failed."
     );
   }
 
   const outputText = (data?.steps || [])
-    .filter((step: any) => step.type === "model_output")
+    .filter(
+      (step: any) => step.type === "model_output"
+    )
     .flatMap((step: any) => step.content || [])
-    .filter((part: any) => part.type === "text")
+    .filter(
+      (part: any) => part.type === "text"
+    )
     .map((part: any) => part.text || "")
     .join("\n")
     .trim();
@@ -436,7 +612,6 @@ ${JSON.stringify(input.raster)}
   }
 }
 
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -450,7 +625,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const geometry = body.geometry || null;
+    const geometry = normaliseGeometry(
+      body.geometry
+    );
 
     let lat = finiteNumber(body.lat);
     let lng = finiteNumber(body.lng);
@@ -465,13 +642,12 @@ export async function POST(request: NextRequest) {
     if (
       lat === null ||
       lng === null ||
-      Math.abs(lat) > 90 ||
-      Math.abs(lng) > 180
+      !validCoordinates(lat, lng)
     ) {
       return NextResponse.json(
         {
           error:
-            "Valid parcel coordinates or polygon geometry are required.",
+            "Valid parcel coordinates or polygon geometry are required. Coordinates cannot be 0,0.",
         },
         { status: 400 }
       );
@@ -517,10 +693,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "No usable Sentinel-2 scene was found for this parcel.",
+            "No Sentinel-2 scenes were found after searching the property boundary and surrounding area. Try again later or check the parcel coordinates.",
           centroid: { lat, lng },
           soil,
           elevation,
+          scenes: [],
         },
         { status: 422 }
       );
