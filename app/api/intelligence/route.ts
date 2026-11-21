@@ -14,22 +14,38 @@ const ELEVATION =
   "https://api.open-meteo.com/v1/elevation";
 
 function finiteNumber(value: unknown): number | null {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
+  if (
+    value === null ||
+    value === undefined ||
+    String(value).trim() === ""
+  ) {
+    return null;
+  }
+
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
 function normaliseGeometry(input: any): any | null {
   if (!input) return null;
+
   if (input.type === "Feature") return input.geometry || null;
-  if (input.type === "FeatureCollection") return input.features?.[0]?.geometry || null;
-  if (input.type === "Polygon" || input.type === "MultiPolygon") return input;
+
+  if (input.type === "FeatureCollection") {
+    return input.features?.[0]?.geometry || null;
+  }
+
+  if (input.type === "Polygon" || input.type === "MultiPolygon") {
+    return input;
+  }
+
   return null;
 }
 
 function centroidFromGeometry(geometry: any) {
   const normalised = normaliseGeometry(geometry);
   const coords = normalised?.coordinates;
+
   if (!coords) return null;
 
   const ring =
@@ -56,7 +72,10 @@ function centroidFromGeometry(geometry: any) {
     lat += Number(point[1]);
   }
 
-  return { lat: lat / points.length, lng: lng / points.length };
+  return {
+    lat: lat / points.length,
+    lng: lng / points.length,
+  };
 }
 
 function bboxFromGeometry(geometry: any) {
@@ -73,10 +92,12 @@ function bboxFromGeometry(geometry: any) {
       points.push(value);
       return;
     }
+
     if (Array.isArray(value)) value.forEach(walk);
   };
 
   walk(normalised?.coordinates);
+
   if (!points.length) return null;
 
   const lngs = points.map((p) => p[0]);
@@ -92,6 +113,7 @@ function bboxFromGeometry(geometry: any) {
 
 function expandBbox(bbox: number[], factor = 0.5): number[] {
   const [minLng, minLat, maxLng, maxLat] = bbox;
+
   const lngPadding = Math.max((maxLng - minLng) * factor, 0.01);
   const latPadding = Math.max((maxLat - minLat) * factor, 0.01);
 
@@ -128,6 +150,7 @@ async function earthSearch(body: Record<string, any>) {
 
   if (!response.ok) {
     const details = await response.text();
+
     throw new Error(
       `Earth Search returned ${response.status}: ${details.slice(0, 300)}`
     );
@@ -143,7 +166,11 @@ async function searchSatellite(
   lng: number
 ) {
   const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear() - 5, 0, 1));
+
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear() - 5, 0, 1)
+  );
+
   const datetime = `${start.toISOString()}/${now.toISOString()}`;
 
   const normalised = normaliseGeometry(geometry);
@@ -210,7 +237,9 @@ async function searchSatellite(
           return {
             id: item.id,
             date: properties.datetime || null,
-            cloudCover: Number(properties["eo:cloud_cover"] ?? 100),
+            cloudCover: Number(
+              properties["eo:cloud_cover"] ?? 100
+            ),
             platform: properties.platform || "Sentinel-2",
             thumbnail:
               assets.thumbnail?.href ||
@@ -229,12 +258,18 @@ async function searchSatellite(
             new Date(b.date || 0).getTime() -
             new Date(a.date || 0).getTime();
 
-          if (dateDifference !== 0) return dateDifference;
+          if (dateDifference !== 0) {
+            return dateDifference;
+          }
+
           return a.cloudCover - b.cloudCover;
         });
 
         if (scenes.length > 0) {
-          console.log(`BhoomiSetu found ${scenes.length} scenes`);
+          console.log(
+            `BhoomiSetu found ${scenes.length} scenes`
+          );
+
           return scenes;
         }
       } catch (error) {
@@ -247,6 +282,7 @@ async function searchSatellite(
   }
 
   console.warn("No Sentinel-2 scenes found for this parcel.");
+
   return [];
 }
 
@@ -258,23 +294,35 @@ async function fetchSoil(lat: number, lng: number) {
   });
 
   for (const property of [
-    "clay", "sand", "silt", "phh2o", "soc", "nitrogen", "cec",
+    "clay",
+    "sand",
+    "silt",
+    "phh2o",
+    "soc",
+    "nitrogen",
+    "cec",
   ]) {
     params.append("property", property);
   }
 
   for (const depth of [
-    "0-5cm", "5-15cm", "15-30cm", "0-30cm",
+    "0-5cm",
+    "5-15cm",
+    "15-30cm",
+    "0-30cm",
   ]) {
     params.append("depth", depth);
   }
 
-  const response = await fetch(`${SOILGRIDS}?${params.toString()}`, {
-    cache: "no-store",
-  });
+  const response = await fetch(
+    `${SOILGRIDS}?${params.toString()}`,
+    { cache: "no-store" }
+  );
 
   if (!response.ok) {
-    throw new Error(`Soil provider returned ${response.status}`);
+    throw new Error(
+      `Soil provider returned ${response.status}`
+    );
   }
 
   return response.json();
@@ -282,17 +330,25 @@ async function fetchSoil(lat: number, lng: number) {
 
 async function fetchElevation(lat: number, lng: number) {
   const url = new URL(ELEVATION);
+
   url.searchParams.set("latitude", String(lat));
   url.searchParams.set("longitude", String(lng));
 
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
 
   if (!response.ok) {
-    throw new Error(`Elevation provider returned ${response.status}`);
+    throw new Error(
+      `Elevation provider returned ${response.status}`
+    );
   }
 
   const data = await response.json();
-  return Array.isArray(data.elevation) ? data.elevation[0] : null;
+
+  return Array.isArray(data.elevation)
+    ? data.elevation[0]
+    : null;
 }
 
 function flattenSoil(data: any) {
@@ -300,8 +356,9 @@ function flattenSoil(data: any) {
 
   for (const layer of data?.properties?.layers || []) {
     const depth =
-      layer.depths?.find((item: any) => item.label === "0-30cm") ||
-      layer.depths?.[0];
+      layer.depths?.find(
+        (item: any) => item.label === "0-30cm"
+      ) || layer.depths?.[0];
 
     if (!depth) continue;
 
@@ -323,11 +380,14 @@ async function fetchRasterEvidence(input: {
   centroid: { lat: number; lng: number };
 }) {
   const url = process.env.BHOOMISETU_RASTER_API_URL;
+
   if (!url) return null;
 
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       geometry: input.geometry,
       centroid: input.centroid,
@@ -340,7 +400,13 @@ async function fetchRasterEvidence(input: {
         blue: input.scene?.blue,
         nir: input.scene?.nir,
       },
-      requestedIndices: ["NDVI", "NDWI", "NIR", "NDMI", "NDBI"],
+      requestedIndices: [
+        "NDVI",
+        "NDWI",
+        "NIR",
+        "NDMI",
+        "NDBI",
+      ],
     }),
     cache: "no-store",
   });
@@ -349,7 +415,8 @@ async function fetchRasterEvidence(input: {
 
   if (!response.ok) {
     throw new Error(
-      data?.error || `Raster processor returned ${response.status}`
+      data?.error ||
+        `Raster processor returned ${response.status}`
     );
   }
 
@@ -365,11 +432,14 @@ async function askGeospatialAi(input: {
   centroid: { lat: number; lng: number };
 }) {
   const url = process.env.BHOOMISETU_GEO_AI_URL;
+
   if (!url) return null;
 
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       geometry: input.geometry,
       centroid: input.centroid,
@@ -386,13 +456,15 @@ async function askGeospatialAi(input: {
 
   if (!response.ok) {
     throw new Error(
-      data?.error || `Geospatial AI processor returned ${response.status}`
+      data?.error ||
+        `Geospatial AI processor returned ${response.status}`
     );
   }
 
   return data?.analysis || data;
 }
 
+// GEMINI AI WITH AUTOMATIC RETRIES
 async function askGemini(input: {
   scene: any;
   soil: any;
@@ -447,58 +519,219 @@ RASTER EVIDENCE:
 ${JSON.stringify(input.raster)}
 `;
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/interactions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        model: "gemini-3.8-flash",
-        input: prompt,
-      }),
-      cache: "no-store",
+  let lastError = "Gemini analysis failed.";
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let response: Response | null = null;
+
+    try {
+      response = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            model:
+              process.env.GEMINI_MODEL ||
+              "gemini-3.8-flash",
+            input: prompt,
+          }),
+          cache: "no-store",
+          signal: AbortSignal.timeout(25000),
+        }
+      );
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        lastError =
+          data?.error?.message ||
+          `Gemini returned HTTP ${response.status}.`;
+
+        const retryable = [
+          408,
+          429,
+          500,
+          502,
+          503,
+          504,
+        ].includes(response.status);
+
+        if (retryable && attempt < 2) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 1500 * (attempt + 1))
+          );
+
+          continue;
+        }
+
+        throw new Error(lastError);
+      }
+
+      const outputText = (data?.steps || [])
+        .filter(
+          (step: any) => step.type === "model_output"
+        )
+        .flatMap(
+          (step: any) => step.content || []
+        )
+        .filter(
+          (part: any) => part.type === "text"
+        )
+        .map(
+          (part: any) => part.text || ""
+        )
+        .join("\n")
+        .trim();
+
+      if (!outputText) {
+        throw new Error("Gemini returned no analysis.");
+      }
+
+      const cleaned = outputText
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/\s*```$/, "")
+        .trim();
+
+      return JSON.parse(cleaned);
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? error.message
+          : lastError;
+
+      const retryable =
+        !response ||
+        [408, 429, 500, 502, 503, 504].includes(
+          response.status
+        );
+
+      if (retryable && attempt < 2) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1500 * (attempt + 1))
+        );
+
+        continue;
+      }
+
+      throw new Error(lastError);
     }
-  );
+  }
 
-  const data = await response.json().catch(() => null);
+  throw new Error(lastError);
+}
 
-  if (!response.ok) {
-    throw new Error(
-      data?.error?.message || "Gemini analysis failed."
+// SAFE FALLBACK WHEN GEMINI IS UNAVAILABLE
+// Does not fabricate land scores or measurements.
+function buildEvidenceFallback(input: {
+  scene: any;
+  soil: any;
+  elevation: number | null;
+  raster: any;
+}) {
+  const hasSoil =
+    input.soil &&
+    typeof input.soil === "object" &&
+    Object.keys(input.soil).some(
+      (key) =>
+        key !== "unavailable" &&
+        input.soil[key]?.value != null
     );
-  }
 
-  const outputText = (data?.steps || [])
-    .filter((step: any) => step.type === "model_output")
-    .flatMap((step: any) => step.content || [])
-    .filter((part: any) => part.type === "text")
-    .map((part: any) => part.text || "")
-    .join("\n")
-    .trim();
+  const hasElevation =
+    typeof input.elevation === "number" &&
+    Number.isFinite(input.elevation);
 
-  if (!outputText) {
-    throw new Error("Gemini returned no analysis.");
-  }
+  const hasRaster =
+    input.raster &&
+    typeof input.raster === "object" &&
+    !input.raster.unavailable;
 
-  try {
-    const cleaned = outputText
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/, "")
-      .trim();
+  return {
+    summary:
+      "Automated AI interpretation is temporarily unavailable. Available source data is retained without generating unsupported land suitability scores. Please retry the analysis later.",
 
-    return JSON.parse(cleaned);
-  } catch {
-    throw new Error("Gemini returned invalid JSON.");
-  }
+    soil: {
+      status: hasSoil
+        ? "DATA AVAILABLE — REVIEW REQUIRED"
+        : "UNAVAILABLE",
+      evidence: hasSoil
+        ? "Soil provider returned measurements. Review the soil data before drawing conclusions."
+        : "No usable soil measurements were returned.",
+      limitations:
+        "Provider measurements do not replace on-site soil sampling.",
+    },
+
+    water: {
+      status: hasRaster
+        ? "RASTER DATA AVAILABLE — REVIEW REQUIRED"
+        : "UNAVAILABLE",
+      evidence: hasRaster
+        ? "Raster processor returned data, but water suitability has not been interpreted."
+        : "No validated water-index result is available.",
+      limitations:
+        "No groundwater or field water assessment was performed.",
+    },
+
+    terrain: {
+      status: hasElevation
+        ? "ELEVATION AVAILABLE"
+        : "UNAVAILABLE",
+      evidence: hasElevation
+        ? `Elevation provider returned ${input.elevation} metres.`
+        : "No elevation measurement was returned.",
+      limitations:
+        "Elevation alone does not establish slope, drainage or buildability.",
+    },
+
+    vegetation: {
+      status: hasRaster
+        ? "RASTER DATA AVAILABLE — REVIEW REQUIRED"
+        : "UNAVAILABLE",
+      evidence: hasRaster
+        ? "Raster data is present, but vegetation indices have not been interpreted."
+        : "No validated vegetation-index result is available.",
+      limitations:
+        "Vegetation condition requires valid spectral measurements and interpretation.",
+    },
+
+    agriculture: {
+      status: "NOT ASSESSED",
+      evidence:
+        "Agricultural suitability has not been assessed because automated AI interpretation is unavailable.",
+      limitations:
+        "A field survey, soil testing and water assessment are required.",
+    },
+
+    scores: {
+      soil: null,
+      water: null,
+      terrain: null,
+      vegetation: null,
+      agriculture: null,
+      overall: null,
+    },
+
+    risks: [
+      "AI interpretation is temporarily unavailable; retry later.",
+      "Do not treat missing measurements as evidence that the land is unsuitable.",
+      "Satellite and third-party data do not verify ownership or legal title.",
+    ],
+
+    recommendedUses: [],
+    confidence: 0,
+    fallback: true,
+  };
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
     const reportId = String(body.reportId || "").trim();
 
     if (!reportId) {
@@ -509,6 +742,7 @@ export async function POST(request: NextRequest) {
     }
 
     const geometry = normaliseGeometry(body.geometry);
+
     let lat = finiteNumber(body.lat);
     let lng = finiteNumber(body.lng);
 
@@ -533,18 +767,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [scenesResult, soilResult, elevationResult] =
-      await Promise.allSettled([
-        searchSatellite(geometry, lat, lng),
-        fetchSoil(lat, lng),
-        fetchElevation(lat, lng),
-      ]);
+    // FETCH SATELLITE, SOIL AND ELEVATION IN PARALLEL
+    const [
+      scenesResult,
+      soilResult,
+      elevationResult,
+    ] = await Promise.allSettled([
+      searchSatellite(geometry, lat, lng),
+      fetchSoil(lat, lng),
+      fetchElevation(lat, lng),
+    ]);
 
     const scenes =
-      scenesResult.status === "fulfilled" ? scenesResult.value : [];
+      scenesResult.status === "fulfilled"
+        ? scenesResult.value
+        : [];
 
     const soilRaw =
-      soilResult.status === "fulfilled" ? soilResult.value : null;
+      soilResult.status === "fulfilled"
+        ? soilResult.value
+        : null;
 
     const elevation =
       elevationResult.status === "fulfilled"
@@ -556,13 +798,16 @@ export async function POST(request: NextRequest) {
       : {
           unavailable:
             soilResult.status === "rejected"
-              ? String(soilResult.reason?.message || "Soil data unavailable")
+              ? String(
+                  soilResult.reason?.message ||
+                    "Soil data unavailable"
+                )
               : "No soil data",
         };
 
     const latestScene = scenes[0] || null;
 
-    // Return partial real data even when satellite imagery is unavailable.
+    // RETURN PARTIAL REAL DATA IF SATELLITE IS UNAVAILABLE
     if (!latestScene) {
       return NextResponse.json({
         success: false,
@@ -576,6 +821,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // OPTIONAL RASTER PROCESSOR
     let raster: any = null;
 
     if (process.env.BHOOMISETU_RASTER_API_URL) {
@@ -595,6 +841,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // OPTIONAL EXTERNAL GEOSPATIAL AI
     let analysis: any = null;
 
     if (process.env.BHOOMISETU_GEO_AI_URL) {
@@ -608,22 +855,47 @@ export async function POST(request: NextRequest) {
           centroid: { lat, lng },
         });
       } catch (error) {
-        console.warn("Geospatial AI provider failed:", error);
+        console.warn(
+          "Geospatial AI provider failed:",
+          error
+        );
       }
     }
 
+    let aiProvider = process.env.BHOOMISETU_GEO_AI_URL
+      ? "geospatial-ai"
+      : "gemini";
+
+    // GEMINI WITH SAFE FALLBACK
     if (!analysis) {
-      analysis = await askGemini({
-        scene: latestScene,
-        soil,
-        elevation,
-        raster,
-        centroid: { lat, lng },
-      });
+      try {
+        analysis = await askGemini({
+          scene: latestScene,
+          soil,
+          elevation,
+          raster,
+          centroid: { lat, lng },
+        });
+      } catch (error) {
+        console.error(
+          "Gemini unavailable; using evidence fallback:",
+          error
+        );
+
+        analysis = buildEvidenceFallback({
+          scene: latestScene,
+          soil,
+          elevation,
+          raster,
+        });
+
+        aiProvider = "evidence-fallback";
+      }
     }
 
     return NextResponse.json({
       success: true,
+      aiProvider,
       source:
         "Sentinel-2 / Earth Search + SoilGrids-compatible soil + Open-Meteo elevation + optional raster indices + Gemini/geospatial AI",
       raster,
@@ -635,7 +907,10 @@ export async function POST(request: NextRequest) {
       analysis,
     });
   } catch (error) {
-    console.error("BhoomiSetu intelligence error:", error);
+    console.error(
+      "BhoomiSetu intelligence error:",
+      error
+    );
 
     return NextResponse.json(
       {
