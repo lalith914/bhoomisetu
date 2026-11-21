@@ -34,11 +34,30 @@ export async function GET(
     },
   });
 
-  // Fetch the property record.
+  // Fetch the property and owner-provided land descriptions.
   const { data: land, error: landError } = await sb
     .from("lands")
     .select(
-      "id,title,location,area,land_type,listing_type,lease_duration,latitude,longitude,verified,verification_level,asking_price,created_at"
+      [
+        "id",
+        "title",
+        "location",
+        "area",
+        "land_type",
+        "listing_type",
+        "lease_duration",
+        "latitude",
+        "longitude",
+        "verified",
+        "verification_level",
+        "asking_price",
+        "created_at",
+        "soil_description",
+        "water_description",
+        "terrain_description",
+        "vegetation_description",
+        "agriculture_description",
+      ].join(",")
     )
     .eq("id", id)
     .maybeSingle();
@@ -59,7 +78,7 @@ export async function GET(
     );
   }
 
-  // Do not expose pending or rejected properties publicly.
+  // Only verified properties are publicly accessible.
   if (land.verified !== true) {
     return NextResponse.json(
       { error: "This property is not publicly available yet." },
@@ -67,7 +86,7 @@ export async function GET(
     );
   }
 
-  // Retrieve photos only after verification is confirmed.
+  // Retrieve owner photographs after verification.
   const { data: photos, error: photoError } = await sb
     .from("land_photos")
     .select("public_url,sort_order,is_cover")
@@ -75,7 +94,10 @@ export async function GET(
     .order("sort_order", { ascending: true });
 
   if (photoError) {
-    console.error("Property photo lookup failed:", photoError.message);
+    console.error(
+      "Property photo lookup failed:",
+      photoError.message
+    );
 
     return NextResponse.json(
       { error: "Unable to retrieve property photos." },
