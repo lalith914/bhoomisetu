@@ -1,784 +1,850 @@
 
-import { NextRequest, NextResponse } from "next/server";
+"use client";
 
-const EARTH_SEARCH =
-  process.env.BHOOMISETU_EARTH_SEARCH_URL ||
-  "https://earth-search.aws.element84.com/v1/search";
+import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
-const SOILGRIDS =
-  process.env.BHOOMISETU_SOIL_API_URL ||
-  "https://rest.isric.org/soilgrids/v2.0/properties/query";
+type Scene = {
+  id: string;
+  date: string | null;
+  cloudCover: number;
+  platform: string;
+  thumbnail: string | null;
+  visual?: string | null;
+};
 
-const ELEVATION =
-  process.env.BHOOMISETU_ELEVATION_URL ||
-  "https://api.open-meteo.com/v1/elevation";
+type PropertyPhoto = {
+  public_url: string;
+  sort_order: number;
+  is_cover: boolean;
+};
 
-function finiteNumber(value: unknown): number | null {
-  if (
-    value === null ||
-    value === undefined ||
-    String(value).trim() === ""
-  ) {
-    return null;
-  }
-
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function normaliseGeometry(input: any): any | null {
-  if (!input) return null;
-
-  if (input.type === "Feature") {
-    return input.geometry || null;
-  }
-
-  if (input.type === "FeatureCollection") {
-    return input.features?.[0]?.geometry || null;
-  }
-
-  if (
-    input.type === "Polygon" ||
-    input.type === "MultiPolygon"
-  ) {
-    return input;
-  }
-
-  return null;
-}
-
-function centroidFromGeometry(geometry: any) {
-  const normalised = normaliseGeometry(geometry);
-  const coords = normalised?.coordinates;
-
-  if (!coords) return null;
-
-  const ring =
-    normalised.type === "Polygon"
-      ? coords[0]
-      : normalised.type === "MultiPolygon"
-        ? coords[0]?.[0]
-        : null;
-
-  if (!Array.isArray(ring) || ring.length < 3) {
-    return null;
-  }
-
-  // Ignore the repeated closing point of the polygon.
-  const points =
-    ring.length > 3 &&
-    ring[0][0] === ring[ring.length - 1][0] &&
-    ring[0][1] === ring[ring.length - 1][1]
-      ? ring.slice(0, -1)
-      : ring;
-
-  let lng = 0;
-  let lat = 0;
-
-  for (const point of points) {
-    lng += Number(point[0]);
-    lat += Number(point[1]);
-  }
-
-  return {
-    lat: lat / points.length,
-    lng: lng / points.length,
+type Analysis = {
+  summary?: string;
+  soil?: { status?: string; evidence?: string; limitations?: string };
+  water?: { status?: string; evidence?: string; limitations?: string };
+  terrain?: { status?: string; evidence?: string; limitations?: string };
+  vegetation?: { status?: string; evidence?: string; limitations?: string };
+  agriculture?: { status?: string; evidence?: string; limitations?: string };
+  scores?: {
+    soil?: number | null;
+    water?: number | null;
+    terrain?: number | null;
+    vegetation?: number | null;
+    agriculture?: number | null;
+    overall?: number | null;
   };
+  risks?: string[];
+  recommendedUses?: string[];
+  confidence?: number;
+};
+
+type LandRecord = {
+  title?: string;
+  location?: string;
+  area?: string;
+  land_type?: string;
+  listing_type?: "SELL" | "LEASE";
+  lease_duration?: string | null;
+  asking_price?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  soil_description?: string | null;
+  water_description?: string | null;
+  terrain_description?: string | null;
+  vegetation_description?: string | null;
+  agriculture_description?: string | null;
+};
+
+function isValidCoordinatePair(lat: number | null, lng: number | null) {
+  if (lat === null || lng === null) return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  if (lat === 0 && lng === 0) return false;
+  return true;
 }
 
-function bboxFromGeometry(geometry: any) {
-  const normalised = normaliseGeometry(geometry);
-  const points: number[][] = [];
+function IntelligenceContent() {
+  const params = useSearchParams();
+  const parcel = params.get("parcel") || params.get("id") || "";
+  const latValue = params.get("lat");
+  const lngValue = params.get("lng");
 
-  const walk = (value: any) => {
-    if (
-      Array.isArray(value) &&
-      value.length >= 2 &&
-      typeof value[0] === "number" &&
-      typeof value[1] === "number"
-    ) {
-      points.push(value);
+  const parsedUrlLat =
+    latValue !== null && latValue.trim() !== "" ? Number(latValue) : null;
+  const parsedUrlLng =
+    lngValue !== null && lngValue.trim() !== "" ? Number(lngValue) : null;
+
+  const urlCoordinatesValid = isValidCoordinatePair(parsedUrlLat, parsedUrlLng);
+
+  const [year, setYear] = useState<number | null>(null);
+  const [layer, setLayer] = useState("TRUE COLOR");
+  const [scenes, setScenes] = useState<Scene[]>([]);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [soil, setSoil] = useState<any>(null);
+  const [elevation, setElevation] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [landGeometry, setLandGeometry] = useState<any>(null);
+
+  const [land, setLand] = useState<LandRecord | null>(null);
+  const [propertyPhotos, setPropertyPhotos] = useState<PropertyPhoto[]>([]);
+  const [landLoading, setLandLoading] = useState(false);
+  const [landLoadError, setLandLoadError] = useState("");
+  const [landFetched, setLandFetched] = useState(false);
+
+  useEffect(() => {
+    if (!parcel || parcel.length < 10) {
+      setLandFetched(true);
       return;
     }
 
-    if (Array.isArray(value)) {
-      value.forEach(walk);
-    }
-  };
+    let active = true;
 
-  walk(normalised?.coordinates);
+    setLandLoading(true);
+    setLandFetched(false);
+    setLandLoadError("");
+    setLand(null);
+    setPropertyPhotos([]);
+    setLandGeometry(null);
 
-  if (!points.length) return null;
+    fetch(`/api/lands/${encodeURIComponent(parcel)}`, {
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Land record unavailable");
+        }
+        return result;
+      })
+      .then((result) => {
+        if (!active) return;
 
-  const lngs = points.map((point) => point[0]);
-  const lats = points.map((point) => point[1]);
+        if (result.land) setLand(result.land);
 
-  return [
-    Math.min(...lngs),
-    Math.min(...lats),
-    Math.max(...lngs),
-    Math.max(...lats),
-  ];
-}
-
-function expandBbox(
-  bbox: number[],
-  factor = 0.25
-): number[] {
-  const [minLng, minLat, maxLng, maxLat] = bbox;
-
-  const lngPadding = Math.max(
-    (maxLng - minLng) * factor,
-    0.01
-  );
-
-  const latPadding = Math.max(
-    (maxLat - minLat) * factor,
-    0.01
-  );
-
-  return [
-    Math.max(-180, minLng - lngPadding),
-    Math.max(-90, minLat - latPadding),
-    Math.min(180, maxLng + lngPadding),
-    Math.min(90, maxLat + latPadding),
-  ];
-}
-
-function validCoordinates(lat: number, lng: number) {
-  return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180 &&
-    !(lat === 0 && lng === 0)
-  );
-}
-
-async function earthSearch(body: Record<string, any>) {
-  const response = await fetch(EARTH_SEARCH, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/geo+json",
-    },
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const details = await response.text();
-
-    throw new Error(
-      `Earth Search returned ${response.status}: ${details.slice(0, 300)}`
-    );
-  }
-
-  return response.json();
-}
-
-async function searchSatellite(
-  geometry: any,
-  lat: number,
-  lng: number
-) {
-  const now = new Date();
-
-  // Search the previous five years.
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear() - 5, 0, 1)
-  );
-
-  const datetime =
-    `${start.toISOString()}/${now.toISOString()}`;
-
-  const baseBody = {
-    collections: ["sentinel-2-l2a"],
-    datetime,
-    limit: 30,
-    query: {
-      "eo:cloud_cover": {
-        lt: 80,
-      },
-    },
-    sortby: [
-      {
-        field: "properties.datetime",
-        direction: "desc",
-      },
-    ],
-  };
-
-  const normalised = normaliseGeometry(geometry);
-  const bbox = bboxFromGeometry(normalised);
-
-  const searches: {
-    name: string;
-    body: Record<string, any>;
-  }[] = [];
-
-  // Attempt 1: exact property boundary.
-  if (normalised) {
-    searches.push({
-      name: "EXACT PROPERTY BOUNDARY",
-      body: {
-        ...baseBody,
-        intersects: normalised,
-      },
-    });
-  }
-
-  // Attempt 2: expanded property bounding box.
-  if (bbox) {
-    searches.push({
-      name: "EXPANDED PROPERTY AREA",
-      body: {
-        ...baseBody,
-        bbox: expandBbox(bbox),
-      },
-    });
-  }
-
-  // Attempt 3: coordinate-based search.
-  searches.push({
-    name: "COORDINATE SEARCH",
-    body: {
-      ...baseBody,
-      bbox: [
-        Math.max(-180, lng - 0.05),
-        Math.max(-90, lat - 0.05),
-        Math.min(180, lng + 0.05),
-        Math.min(90, lat + 0.05),
-      ],
-    },
-  });
-
-  let lastError = "";
-
-  for (const search of searches) {
-    try {
-      console.log(
-        `BhoomiSetu satellite search: ${search.name}`
-      );
-
-      const data = await earthSearch(search.body);
-
-      const scenes = Array.isArray(data.features)
-        ? data.features.map((item: any) => ({
-            id: item.id,
-            date: item.properties?.datetime || null,
-            cloudCover: Number(
-              item.properties?.["eo:cloud_cover"] ?? 0
-            ),
-            platform:
-              item.properties?.platform || "Sentinel-2",
-            thumbnail:
-              item.assets?.thumbnail?.href || null,
-            visual:
-              item.assets?.visual?.href || null,
-            red: item.assets?.red?.href || null,
-            green: item.assets?.green?.href || null,
-            blue: item.assets?.blue?.href || null,
-            nir: item.assets?.nir?.href || null,
-          }))
-        : [];
-
-      if (scenes.length > 0) {
-        console.log(
-          `BhoomiSetu found ${scenes.length} Sentinel-2 scenes using ${search.name}`
+        setPropertyPhotos(
+          Array.isArray(result.photos) ? result.photos : []
         );
 
-        return scenes;
-      }
-    } catch (error) {
-      lastError =
-        error instanceof Error
-          ? error.message
-          : "Satellite search failed.";
+        if (result.geometry) setLandGeometry(result.geometry);
+      })
+      .catch((err) => {
+        if (active) {
+          setLandLoadError(
+            err instanceof Error ? err.message : "Unable to load land details."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLandLoading(false);
+          setLandFetched(true);
+        }
+      });
 
-      console.warn(
-        `BhoomiSetu ${search.name} failed:`,
-        lastError
-      );
-    }
-  }
-
-  if (lastError) {
-    console.warn("All satellite search attempts completed.");
-  }
-
-  return [];
-}
-
-async function fetchSoil(lat: number, lng: number) {
-  const params = new URLSearchParams({
-    lon: String(lng),
-    lat: String(lat),
-    value: "mean",
-  });
-
-  for (const property of [
-    "clay",
-    "sand",
-    "silt",
-    "phh2o",
-    "soc",
-    "nitrogen",
-    "cec",
-  ]) {
-    params.append("property", property);
-  }
-
-  for (const depth of [
-    "0-5cm",
-    "5-15cm",
-    "15-30cm",
-    "0-30cm",
-  ]) {
-    params.append("depth", depth);
-  }
-
-  const response = await fetch(
-    `${SOILGRIDS}?${params.toString()}`,
-    { cache: "no-store" }
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `Soil provider returned ${response.status}`
-    );
-  }
-
-  return response.json();
-}
-
-async function fetchElevation(
-  lat: number,
-  lng: number
-) {
-  const url = new URL(ELEVATION);
-
-  url.searchParams.set("latitude", String(lat));
-  url.searchParams.set("longitude", String(lng));
-
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Elevation provider returned ${response.status}`
-    );
-  }
-
-  const data = await response.json();
-
-  return Array.isArray(data.elevation)
-    ? data.elevation[0]
-    : null;
-}
-
-function flattenSoil(data: any) {
-  const output: Record<string, unknown> = {};
-
-  for (const layer of data?.properties?.layers || []) {
-    const name = layer.name;
-
-    const depth =
-      layer.depths?.find(
-        (item: any) => item.label === "0-30cm"
-      ) || layer.depths?.[0];
-
-    if (!depth) continue;
-
-    output[name] = {
-      unit:
-        layer.unit_measure?.mapped_units ||
-        layer.unit_measure?.target_units ||
-        null,
-      value: depth.values?.mean ?? null,
+    return () => {
+      active = false;
     };
-  }
+  }, [parcel]);
 
-  return output;
-}
+  const savedLat =
+    land?.latitude !== undefined && land?.latitude !== null
+      ? Number(land.latitude)
+      : null;
 
-async function fetchRasterEvidence(input: {
-  geometry: any;
-  scene: any;
-  centroid: { lat: number; lng: number };
-}) {
-  const url =
-    process.env.BHOOMISETU_RASTER_API_URL ||
-    "http://127.0.0.1:3000/api/raster";
+  const savedLng =
+    land?.longitude !== undefined && land?.longitude !== null
+      ? Number(land.longitude)
+      : null;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      geometry: input.geometry,
-      centroid: input.centroid,
-      scene: {
-        id: input.scene?.id,
-        date: input.scene?.date,
-        platform: input.scene?.platform,
-        red: input.scene?.red,
-        green: input.scene?.green,
-        blue: input.scene?.blue,
-        nir: input.scene?.nir,
-      },
-      requestedIndices: [
-        "NDVI",
-        "NDWI",
-        "NIR",
-        "NDMI",
-        "NDBI",
-      ],
-    }),
-    cache: "no-store",
-  });
+  const savedCoordinatesValid = isValidCoordinatePair(savedLat, savedLng);
 
-  const data = await response.json().catch(() => null);
+  const lat = urlCoordinatesValid
+    ? parsedUrlLat
+    : savedCoordinatesValid
+      ? savedLat
+      : null;
 
-  if (!response.ok) {
-    throw new Error(
-      data?.error ||
-        `Raster processor returned ${response.status}`
-    );
-  }
+  const lng = urlCoordinatesValid
+    ? parsedUrlLng
+    : savedCoordinatesValid
+      ? savedLng
+      : null;
 
-  return data;
-}
+  useEffect(() => {
+    if (!landFetched) return;
 
-async function askGeospatialAi(input: {
-  geometry: any;
-  scene: any;
-  soil: any;
-  elevation: number | null;
-  raster: any;
-  centroid: { lat: number; lng: number };
-}) {
-  const url = process.env.BHOOMISETU_GEO_AI_URL;
+    if (!isValidCoordinatePair(lat, lng)) {
+      setScenes([]);
+      setAnalysis(null);
+      setError(
+        "This property does not have valid coordinates. Please update its latitude and longitude."
+      );
+      return;
+    }
 
-  if (!url) return null;
+    let active = true;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      geometry: input.geometry,
-      centroid: input.centroid,
-      scene: input.scene,
-      soil: input.soil,
-      elevation: input.elevation,
-      raster: input.raster,
-      outputSchema: "BhoomiSetuLandIntelligenceV1",
-    }),
-    cache: "no-store",
-  });
+    setLoading(true);
+    setError("");
+    setScenes([]);
+    setAnalysis(null);
+    setYear(null);
 
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new Error(
-      data?.error ||
-        `Geospatial AI processor returned ${response.status}`
-    );
-  }
-
-  return data?.analysis || data;
-}
-
-async function askGemini(input: {
-  scene: any;
-  soil: any;
-  elevation: number | null;
-  raster: any;
-  centroid: { lat: number; lng: number };
-}) {
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error(
-      "GEMINI_API_KEY is not configured."
-    );
-  }
-
-  const prompt = `
-You are BhoomiSetu's geospatial intelligence engine.
-
-Analyze this land parcel using ONLY the supplied evidence.
-
-Rules:
-1. Never invent measurements or facts.
-2. Distinguish satellite inference from field verification.
-3. If soil data is missing, say unavailable.
-4. If evidence is insufficient, return null for the overall score.
-5. Do not make legal ownership or title claims.
-6. Never claim satellite imagery proves ownership.
-
-Return valid JSON only with these keys:
-summary, soil, water, terrain, vegetation,
-agriculture, scores, risks, recommendedUses, confidence.
-
-scores must contain:
-soil, water, terrain, vegetation, agriculture, overall.
-
-Each score must be a number from 0 to 100 or null.
-
-soil, water, terrain, vegetation and agriculture
-must each be objects containing:
-status, evidence, limitations.
-
-recommendedUses must be an array of strings.
-risks must be an array of strings.
-confidence must be a number from 0 to 100.
-
-CENTROID:
-${JSON.stringify(input.centroid)}
-
-ELEVATION IN METRES:
-${input.elevation ?? "Unavailable"}
-
-SATELLITE SCENE:
-${JSON.stringify(input.scene)}
-
-SOIL DATA:
-${JSON.stringify(input.soil)}
-
-RASTER EVIDENCE:
-${JSON.stringify(input.raster)}
-`;
-
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/interactions",
-    {
+    fetch("/api/intelligence", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gemini-3.8-flash",
-        input: prompt,
+        reportId: parcel || `parcel-${lat}-${lng}`,
+        lat,
+        lng,
+        geometry: landGeometry,
       }),
       cache: "no-store",
-    }
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Unable to analyze this parcel.");
+        }
+        return data;
+      })
+      .then((data) => {
+        if (!active) return;
+
+        setScenes(Array.isArray(data.scenes) ? data.scenes : []);
+        setAnalysis(data.analysis || null);
+        setSoil(data.soil || null);
+        setElevation(data.elevation ?? null);
+
+        const firstYear = Number(
+          String(data.scenes?.[0]?.date || "").slice(0, 4)
+        );
+
+        setYear(
+          Number.isFinite(firstYear) && firstYear > 0 ? firstYear : null
+        );
+      })
+      .catch((err) => {
+        if (active) {
+          setError(
+            err instanceof Error ? err.message : "Unable to analyze this parcel."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [lat, lng, landGeometry, parcel, landFetched]);
+
+  const years = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          scenes
+            .map((scene) => Number(String(scene.date || "").slice(0, 4)))
+            .filter((value) => Number.isFinite(value) && value > 0)
+        )
+      ).sort((a, b) => b - a),
+    [scenes]
   );
 
-  const data = await response.json().catch(() => null);
+  const selectedScene =
+    scenes.find(
+      (scene) => Number(String(scene.date || "").slice(0, 4)) === year
+    ) ||
+    scenes[0] ||
+    null;
 
-  if (!response.ok) {
-    throw new Error(
-      data?.error?.message ||
-        "Gemini analysis failed."
-    );
+  const score = analysis?.scores?.overall ?? null;
+
+  const metrics = [
+    ["SOIL", analysis?.scores?.soil, analysis?.soil?.status || "UNAVAILABLE"],
+    ["WATER", analysis?.scores?.water, analysis?.water?.status || "UNAVAILABLE"],
+    ["TERRAIN", analysis?.scores?.terrain, analysis?.terrain?.status || "UNAVAILABLE"],
+    ["VEGETATION", analysis?.scores?.vegetation, analysis?.vegetation?.status || "UNAVAILABLE"],
+    ["AGRICULTURE", analysis?.scores?.agriculture, analysis?.agriculture?.status || "UNAVAILABLE"],
+  ] as const;
+
+  const ownerDescriptions = [
+    ["SOIL", land?.soil_description],
+    ["WATER", land?.water_description],
+    ["TERRAIN", land?.terrain_description],
+    ["VEGETATION", land?.vegetation_description],
+    ["AGRICULTURE", land?.agriculture_description],
+  ] as const;
+
+  async function askLand() {
+    const cleanQuestion = question.trim();
+    if (!cleanQuestion || !analysis || asking) return;
+
+    setAsking(true);
+    setAnswer("");
+
+    try {
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reportId: parcel || `parcel-${lat}-${lng}`,
+          question: cleanQuestion,
+          analysis,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "AI request failed.");
+
+      setAnswer(result.answer || "No answer returned.");
+    } catch (error) {
+      setAnswer(
+        error instanceof Error ? error.message : "AI request failed."
+      );
+    } finally {
+      setAsking(false);
+    }
   }
 
-  const outputText = (data?.steps || [])
-    .filter(
-      (step: any) => step.type === "model_output"
-    )
-    .flatMap((step: any) => step.content || [])
-    .filter(
-      (part: any) => part.type === "text"
-    )
-    .map((part: any) => part.text || "")
-    .join("\n")
-    .trim();
+  return (
+    <main className="intel-console">
+      <header className="console-header">
+        <Link href="/" className="console-wordmark">
+          BHOOMI<span>SETU</span>
+        </Link>
 
-  if (!outputText) {
-    throw new Error("Gemini returned no analysis.");
-  }
+        <nav>
+          <Link href="/explore">EXPLORE</Link>
+          <Link className="active" href="/intelligence">INTELLIGENCE</Link>
+          <Link href="/about">ABOUT</Link>
+        </nav>
 
-  try {
-    const cleaned = outputText
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/, "")
-      .trim();
+        <div className="console-status">
+          <i /> SATELLITE LINK / ONLINE
+          <Link href="/account">ACCOUNT ↗</Link>
+        </div>
+      </header>
 
-    return JSON.parse(cleaned);
-  } catch {
-    throw new Error("Gemini returned invalid JSON.");
-  }
+      <section className="intel-top">
+        <div>
+          <span className="console-kicker">
+            02 / LAND INTELLIGENCE / {parcel || "SELECT A PARCEL"}
+          </span>
+
+          <h1>
+            Read the
+            <br />
+            <em>land.</em>
+          </h1>
+
+          <p>
+            Real satellite acquisitions, geospatial data and
+            evidence-backed AI interpretation.
+          </p>
+        </div>
+
+        <div className="intel-coords">
+          <span>WGS 84</span>
+          <b>{lat !== null ? `${lat.toFixed(5)}° N` : "—"}</b>
+          <b>{lng !== null ? `${lng.toFixed(5)}° E` : "—"}</b>
+          <span>LIVE PARCEL ANALYSIS</span>
+        </div>
+      </section>
+
+      {landLoading && (
+        <section className="intel-empty-state">
+          <span>LOADING PROPERTY</span>
+          <h2>Retrieving land details.</h2>
+          <p>
+            Loading the selected property and its owner-uploaded photographs.
+          </p>
+        </section>
+      )}
+
+      {!landLoading && (lat === null || lng === null) ? (
+        <section className="intel-empty-state">
+          <span>NO VALID PARCEL SELECTED</span>
+          <h2>Start from the map.</h2>
+          <p>
+            Select a property from Explore. If the selected property has no
+            saved coordinates, update its land record before running satellite
+            analysis.
+          </p>
+          <Link href="/explore" className="console-action">
+            OPEN EXPLORE <span>↗</span>
+          </Link>
+        </section>
+      ) : !landLoading && lat !== null && lng !== null ? (
+        <>
+          <section className="public-land-card">
+            <span>PUBLIC LAND LISTING</span>
+            <h2>{land?.title || parcel || "Selected land"}</h2>
+
+            <div
+              style={{
+                display: "inline-flex",
+                margin: "12px 0 20px",
+                padding: "9px 14px",
+                background:
+                  land?.listing_type === "LEASE" ? "#d7c49a" : "#b8ff5a",
+                color: "#07100d",
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: ".12em",
+              }}
+            >
+              {land?.listing_type === "LEASE"
+                ? "AVAILABLE FOR LEASE"
+                : "AVAILABLE FOR SALE"}
+            </div>
+
+            <div className="public-land-facts">
+              <div>
+                <small>LOCATION</small>
+                <strong>
+                  {land?.location ||
+                    `${lat.toFixed(5)}° N / ${lng.toFixed(5)}° E`}
+                </strong>
+              </div>
+
+              <div>
+                <small>AREA</small>
+                <strong>{land?.area || "—"}</strong>
+              </div>
+
+              <div>
+                <small>
+                  {land?.listing_type === "LEASE"
+                    ? "LEASE AMOUNT"
+                    : "ASKING PRICE"}
+                </small>
+                <strong>{land?.asking_price || "ON REQUEST"}</strong>
+              </div>
+
+              <div>
+                <small>PURPOSE</small>
+                <strong>{land?.land_type || "—"}</strong>
+              </div>
+
+              {land?.listing_type === "LEASE" && (
+                <div>
+                  <small>LEASE DURATION</small>
+                  <strong>{land.lease_duration || "Not specified"}</strong>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section
+            style={{
+              padding: "42px 0",
+              borderBottom: "1px solid rgba(255,255,255,.12)",
+            }}
+          >
+            <div className="section-heading">
+              <div>
+                <span>PROPERTY / OWNER PHOTOGRAPHS</span>
+                <h2>
+                  See the <i>property.</i>
+                </h2>
+              </div>
+              <p>Actual photographs uploaded by the property owner.</p>
+            </div>
+
+            {landLoadError ? (
+              <p style={{ color: "#ff9c8e", padding: "20px 0" }}>
+                {landLoadError}
+              </p>
+            ) : propertyPhotos.length > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fill,minmax(min(100%,260px),1fr))",
+                  gap: 16,
+                  marginTop: 24,
+                }}
+              >
+                {propertyPhotos.map((photo, index) => (
+                  <a
+                    key={`${photo.public_url}-${index}`}
+                    href={photo.public_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      position: "relative",
+                      display: "block",
+                      overflow: "hidden",
+                      background: "#14221a",
+                      aspectRatio: "4 / 3",
+                    }}
+                  >
+                    <img
+                      src={photo.public_url}
+                      alt={`Owner property photo ${index + 1}`}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                        transition: "transform .3s ease",
+                      }}
+                    />
+
+                    {photo.is_cover && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 12,
+                          top: 12,
+                          background: "#b8ff5a",
+                          color: "#07100d",
+                          padding: "8px 10px",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: ".12em",
+                        }}
+                      >
+                        COVER PHOTO
+                      </span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 20,
+                  padding: "36px 20px",
+                  border: "1px solid rgba(255,255,255,.14)",
+                  color: "#a8b3a9",
+                  fontSize: 12,
+                  textAlign: "center",
+                }}
+              >
+                NO OWNER PHOTOGRAPHS AVAILABLE FOR THIS PROPERTY
+              </div>
+            )}
+          </section>
+
+          {error && (
+            <section className="intel-error">
+              <span>INTELLIGENCE ENGINE</span>
+              <strong>{error}</strong>
+              <p>
+                Check the parcel coordinates and satellite/AI provider
+                configuration, then try again.
+              </p>
+            </section>
+          )}
+
+          <section className="intel-visual-grid">
+            <div className="satellite-stage">
+              <div className="stage-top">
+                <span>LAND / TEMPORAL SATELLITE</span>
+                <span>
+                  {loading
+                    ? "ACQUIRING…"
+                    : selectedScene
+                      ? "DATA READY"
+                      : "NO SCENE"}
+                </span>
+              </div>
+
+              <div
+                className={`satellite-art layer-${layer
+                  .replaceAll(" ", "-")
+                  .toLowerCase()}`}
+              >
+                {selectedScene?.thumbnail ? (
+                  <img
+                    src={selectedScene.thumbnail}
+                    alt={`Sentinel-2 scene for ${parcel || "parcel"}`}
+                  />
+                ) : (
+                  <div className="satellite-unavailable">
+                    SATELLITE PREVIEW UNAVAILABLE
+                  </div>
+                )}
+
+                <div className="scanline" />
+                <div className="crosshair">
+                  <span />
+                  <span />
+                </div>
+
+                <div className="scene-meta">
+                  <span>{selectedScene?.platform || "—"}</span>
+                  <span>{selectedScene?.date || "—"}</span>
+                  <span>
+                    {selectedScene
+                      ? `CLOUD ${selectedScene.cloudCover.toFixed(1)}%`
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="layer-rail">
+                {["TRUE COLOR", "NDVI", "NDWI", "NIR", "TERRAIN"].map(
+                  (value) => (
+                    <button
+                      key={value}
+                      className={layer === value ? "selected" : ""}
+                      onClick={() => setLayer(value)}
+                    >
+                      {value}
+                    </button>
+                  )
+                )}
+              </div>
+
+              <div className="satellite-note">
+                True-color imagery is sourced from the selected Sentinel-2
+                acquisition. Derived spectral layers require the connected
+                raster-processing provider.
+              </div>
+            </div>
+
+            <aside className="intel-side">
+              <div className="side-section">
+                <span>LAND PROFILE</span>
+                <strong>{parcel || "SELECTED PARCEL"}</strong>
+                <small>
+                  {lat.toFixed(5)}° / {lng.toFixed(5)}° · ELEVATION{" "}
+                  {elevation ?? "—"} M
+                </small>
+              </div>
+
+              <div className="score-readout">
+                <span>LAND INTELLIGENCE SCORE</span>
+                <b>{score ?? "—"}</b>
+                <div className="score-line">
+                  <i
+                    style={{
+                      width: `${Math.max(
+                        0,
+                        Math.min(100, Number(score || 0))
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="metric-list">
+                {metrics.map(([name, value, note]) => (
+                  <div key={name}>
+                    <span>{name}</span>
+                    <b>{value ?? "—"}</b>
+                    <em>{note}</em>
+                  </div>
+                ))}
+              </div>
+
+              <Link
+                href={`/report?id=${encodeURIComponent(
+                  parcel || `${lat},${lng}`
+                )}&lat=${lat}&lng=${lng}`}
+                className="console-action"
+              >
+                GENERATE FULL LAND REPORT <span>↗</span>
+              </Link>
+            </aside>
+          </section>
+
+          <section className="temporal-section">
+            <div className="section-heading">
+              <div>
+                <span>03 / TEMPORAL ANALYSIS</span>
+                <h2>Land over time.</h2>
+              </div>
+              <p>
+                Historical Sentinel-2 acquisitions for the selected parcel.
+                Cloud cover is shown from the source metadata.
+              </p>
+            </div>
+
+            <div className="timeline-meta">
+              <strong>{year ?? "—"}</strong>
+              <span>{selectedScene?.date || "—"}</span>
+              <span>{selectedScene?.platform || "—"}</span>
+              <span>
+                {selectedScene
+                  ? `${selectedScene.cloudCover.toFixed(1)}% CLOUD`
+                  : "—"}
+              </span>
+            </div>
+
+            <div className="year-rail">
+              {years.map((value) => (
+                <button
+                  key={value}
+                  className={year === value ? "active" : ""}
+                  onClick={() => setYear(value)}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+
+            {years.length > 1 && (
+              <input
+                className="temporal-slider"
+                type="range"
+                min={Math.min(...years)}
+                max={Math.max(...years)}
+                step="1"
+                value={year ?? years[0]}
+                onChange={(e) => setYear(Number(e.target.value))}
+              />
+            )}
+
+            <div className="change-strip">
+              <div>
+                <span>SCENES FOUND</span>
+                <b>{scenes.length}</b>
+              </div>
+              <div>
+                <span>BEST CLOUD COVER</span>
+                <b>
+                  {scenes.length
+                    ? `${Math.min(
+                        ...scenes.map((scene) => scene.cloudCover)
+                      ).toFixed(1)}%`
+                    : "—"}
+                </b>
+              </div>
+              <div>
+                <span>EARLIEST SCENE</span>
+                <b>{years.length ? Math.min(...years) : "—"}</b>
+              </div>
+              <div>
+                <span>CONFIDENCE</span>
+                <b>{analysis?.confidence ?? "—"}</b>
+              </div>
+            </div>
+          </section>
+
+          <section className="analysis-grid">
+            <div className="analysis-panel">
+              <span>04 / OWNER-PROVIDED PROPERTY DETAILS</span>
+              <h3>What the land says.</h3>
+
+              <p>
+                The following descriptions were supplied by the property
+                owner. They are displayed as provided and have not been
+                independently verified by BhoomiSetu.
+              </p>
+
+              <div className="evidence-list">
+                {ownerDescriptions.map(([name, value]) => (
+                  <div key={name}>
+                    <strong>{name}</strong>
+                    <span>{value?.trim() || "Not provided by owner"}</span>
+                    <small>OWNER-PROVIDED INFORMATION · NOT VERIFIED</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="analysis-panel">
+              <span>05 / ASK BHOOMISETU</span>
+              <h3>Ask this land.</h3>
+
+              <div className="ask-row">
+                <input
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      askLand();
+                    }
+                  }}
+                  placeholder="Ask about this parcel…"
+                />
+
+                <button
+                  onClick={askLand}
+                  disabled={asking || !question.trim() || !analysis}
+                >
+                  {asking ? "THINKING..." : "ASK ↗"}
+                </button>
+              </div>
+
+              {answer && (
+                <div className="ai-answer">
+                  <small>GEOINTELLIGENCE ENGINE</small>
+                  {answer}
+                </div>
+              )}
+
+              <div className="risk-box">
+                <small>RISKS / LIMITATIONS</small>
+                {(analysis?.risks || []).length ? (
+                  analysis?.risks?.map((risk) => <p key={risk}>{risk}</p>)
+                ) : (
+                  <p>No AI risk list returned.</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="compare-section">
+            <div className="section-heading">
+              <div>
+                <span>06 / RECOMMENDED USE</span>
+                <h2>Use the evidence.</h2>
+              </div>
+              <p>
+                Recommendations are AI interpretations of the supplied
+                geospatial evidence, not a substitute for survey, soil testing,
+                title verification or professional advice.
+              </p>
+            </div>
+
+            <div className="recommended-grid">
+              {(analysis?.recommendedUses || []).map((use) => (
+                <div key={use}>
+                  <span>RECOMMENDED</span>
+                  <b>{use}</b>
+                </div>
+              ))}
+            </div>
+
+            <div className="data-provenance">
+              <span>DATA PROVENANCE</span>
+              <p>
+                Sentinel-2 discovery: Element84 Earth Search · Soil profile:
+                configured SoilGrids-compatible provider · Elevation:
+                Open-Meteo · Interpretation: configured OpenAI model.
+              </p>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      <footer className="console-footer">
+        <span>BHOOMISETU / LAND INTELLIGENCE SYSTEM</span>
+        <span>GEOINT · TERRAIN · AGRICULTURE · SATELLITE</span>
+        <span>© 2026</span>
+      </footer>
+    </main>
+  );
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-
-    const reportId = String(body.reportId || "").trim();
-
-    if (!reportId) {
-      return NextResponse.json(
-        { error: "Report ID is required." },
-        { status: 400 }
-      );
-    }
-
-    const geometry = normaliseGeometry(
-      body.geometry
-    );
-
-    let lat = finiteNumber(body.lat);
-    let lng = finiteNumber(body.lng);
-
-    const centroid = centroidFromGeometry(geometry);
-
-    if (centroid) {
-      lat = centroid.lat;
-      lng = centroid.lng;
-    }
-
-    if (
-      lat === null ||
-      lng === null ||
-      !validCoordinates(lat, lng)
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "Valid parcel coordinates or polygon geometry are required. Coordinates cannot be 0,0.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const [
-      scenesResult,
-      soilResult,
-      elevationResult,
-    ] = await Promise.allSettled([
-      searchSatellite(geometry, lat, lng),
-      fetchSoil(lat, lng),
-      fetchElevation(lat, lng),
-    ]);
-
-    const scenes =
-      scenesResult.status === "fulfilled"
-        ? scenesResult.value
-        : [];
-
-    const soilRaw =
-      soilResult.status === "fulfilled"
-        ? soilResult.value
-        : null;
-
-    const elevation =
-      elevationResult.status === "fulfilled"
-        ? elevationResult.value
-        : null;
-
-    const soil = soilRaw
-      ? flattenSoil(soilRaw)
-      : {
-          unavailable:
-            soilResult.status === "rejected"
-              ? soilResult.reason?.message
-              : "No soil data",
-        };
-
-    const latestScene = scenes[0] || null;
-
-    if (!latestScene) {
-      return NextResponse.json(
-        {
-          error:
-            "No Sentinel-2 scenes were found after searching the property boundary and surrounding area. Try again later or check the parcel coordinates.",
-          centroid: { lat, lng },
-          soil,
-          elevation,
-          scenes: [],
-        },
-        { status: 422 }
-      );
-    }
-
-    let raster: any = null;
-
-    if (process.env.BHOOMISETU_RASTER_API_URL) {
-      try {
-        raster = await fetchRasterEvidence({
-          geometry,
-          scene: latestScene,
-          centroid: { lat, lng },
-        });
-      } catch (error) {
-        raster = {
-          unavailable:
-            error instanceof Error
-              ? error.message
-              : "Raster processor unavailable",
-        };
-      }
-    }
-
-    let analysis: any = null;
-
-    if (process.env.BHOOMISETU_GEO_AI_URL) {
-      try {
-        analysis = await askGeospatialAi({
-          geometry,
-          scene: latestScene,
-          soil,
-          elevation,
-          raster,
-          centroid: { lat, lng },
-        });
-      } catch (error) {
-        console.warn(
-          "BhoomiSetu geospatial AI provider failed:",
-          error
-        );
-      }
-    }
-
-    if (!analysis) {
-      analysis = await askGemini({
-        scene: latestScene,
-        soil,
-        elevation,
-        raster,
-        centroid: { lat, lng },
-      });
-    }
-
-    return NextResponse.json({
-      success: true,
-      source:
-        "Sentinel-2 / Earth Search + SoilGrids-compatible soil + Open-Meteo elevation + optional raster indices + Gemini/geospatial AI",
-      raster,
-      centroid: { lat, lng },
-      elevation,
-      soil,
-      scenes,
-      latestScene,
-      analysis,
-    });
-  } catch (error) {
-    console.error(
-      "BhoomiSetu intelligence error",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to generate land intelligence.",
-      },
-      { status: 502 }
-    );
-  }
+export default function IntelligencePage() {
+  return (
+    <Suspense fallback={<main className="intel-console" />}>
+      <IntelligenceContent />
+    </Suspense>
+  );
 }
