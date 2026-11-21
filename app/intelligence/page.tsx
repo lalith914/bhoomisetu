@@ -14,6 +14,12 @@ type Scene = {
   visual?: string | null;
 };
 
+type PropertyPhoto = {
+  public_url: string;
+  sort_order: number;
+  is_cover: boolean;
+};
+
 type Analysis = {
   summary?: string;
   soil?: { status?: string; evidence?: string; limitations?: string };
@@ -62,26 +68,58 @@ function IntelligenceContent() {
     location?: string;
     area?: string;
     land_type?: string;
+    listing_type?: "SELL" | "LEASE";
+    lease_duration?: string | null;
     asking_price?: string | null;
   } | null>(null);
+
+  const [propertyPhotos, setPropertyPhotos] = useState<PropertyPhoto[]>([]);
+  const [landLoading, setLandLoading] = useState(false);
+  const [landLoadError, setLandLoadError] = useState("");
 
   useEffect(() => {
     if (!parcel || parcel.length < 20) return;
 
+    let active = true;
+    setLandLoading(true);
+    setLandLoadError("");
+
     fetch(`/api/lands/${encodeURIComponent(parcel)}`, {
       cache: "no-store",
     })
-      .then((response) => {
+      .then(async (response) => {
+        const result = await response.json();
+
         if (!response.ok) {
-          throw new Error("Land record unavailable");
+          throw new Error(result.error || "Land record unavailable");
         }
-        return response.json();
+
+        return result;
       })
       .then((result) => {
+        if (!active) return;
+
         if (result.land) setLand(result.land);
+        setPropertyPhotos(
+          Array.isArray(result.photos) ? result.photos : []
+        );
+
         if (result.geometry) setLandGeometry(result.geometry);
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        if (active) {
+          setLandLoadError(
+            err instanceof Error ? err.message : "Unable to load land details."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLandLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [parcel]);
 
   useEffect(() => {
@@ -109,9 +147,7 @@ function IntelligenceContent() {
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(
-            data.error || "Unable to analyze this parcel."
-          );
+          throw new Error(data.error || "Unable to analyze this parcel.");
         }
 
         return data;
@@ -119,10 +155,7 @@ function IntelligenceContent() {
       .then((data) => {
         if (!active) return;
 
-        setScenes(
-          Array.isArray(data.scenes) ? data.scenes : []
-        );
-
+        setScenes(Array.isArray(data.scenes) ? data.scenes : []);
         setAnalysis(data.analysis || null);
         setSoil(data.soil || null);
         setElevation(data.elevation ?? null);
@@ -160,13 +193,8 @@ function IntelligenceContent() {
       Array.from(
         new Set(
           scenes
-            .map((scene) =>
-              Number(String(scene.date || "").slice(0, 4))
-            )
-            .filter(
-              (value) =>
-                Number.isFinite(value) && value > 0
-            )
+            .map((scene) => Number(String(scene.date || "").slice(0, 4)))
+            .filter((value) => Number.isFinite(value) && value > 0)
         )
       ).sort((a, b) => b - a),
     [scenes]
@@ -174,8 +202,7 @@ function IntelligenceContent() {
 
   const selectedScene =
     scenes.find(
-      (scene) =>
-        Number(String(scene.date || "").slice(0, 4)) === year
+      (scene) => Number(String(scene.date || "").slice(0, 4)) === year
     ) ||
     scenes[0] ||
     null;
@@ -183,31 +210,11 @@ function IntelligenceContent() {
   const score = analysis?.scores?.overall ?? null;
 
   const metrics = [
-    [
-      "SOIL",
-      analysis?.scores?.soil,
-      analysis?.soil?.status || "UNAVAILABLE",
-    ],
-    [
-      "WATER",
-      analysis?.scores?.water,
-      analysis?.water?.status || "UNAVAILABLE",
-    ],
-    [
-      "TERRAIN",
-      analysis?.scores?.terrain,
-      analysis?.terrain?.status || "UNAVAILABLE",
-    ],
-    [
-      "VEGETATION",
-      analysis?.scores?.vegetation,
-      analysis?.vegetation?.status || "UNAVAILABLE",
-    ],
-    [
-      "AGRICULTURE",
-      analysis?.scores?.agriculture,
-      analysis?.agriculture?.status || "UNAVAILABLE",
-    ],
+    ["SOIL", analysis?.scores?.soil, analysis?.soil?.status || "UNAVAILABLE"],
+    ["WATER", analysis?.scores?.water, analysis?.water?.status || "UNAVAILABLE"],
+    ["TERRAIN", analysis?.scores?.terrain, analysis?.terrain?.status || "UNAVAILABLE"],
+    ["VEGETATION", analysis?.scores?.vegetation, analysis?.vegetation?.status || "UNAVAILABLE"],
+    ["AGRICULTURE", analysis?.scores?.agriculture, analysis?.agriculture?.status || "UNAVAILABLE"],
   ] as const;
 
   async function askLand() {
@@ -234,17 +241,13 @@ function IntelligenceContent() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          result.error || "AI request failed."
-        );
+        throw new Error(result.error || "AI request failed.");
       }
 
       setAnswer(result.answer || "No answer returned.");
     } catch (error) {
       setAnswer(
-        error instanceof Error
-          ? error.message
-          : "AI request failed."
+        error instanceof Error ? error.message : "AI request failed."
       );
     } finally {
       setAsking(false);
@@ -275,8 +278,7 @@ function IntelligenceContent() {
       <section className="intel-top">
         <div>
           <span className="console-kicker">
-            02 / LAND INTELLIGENCE /{" "}
-            {parcel || "SELECT A PARCEL"}
+            02 / LAND INTELLIGENCE / {parcel || "SELECT A PARCEL"}
           </span>
 
           <h1>
@@ -293,12 +295,8 @@ function IntelligenceContent() {
 
         <div className="intel-coords">
           <span>WGS 84</span>
-          <b>
-            {lat !== null ? `${lat.toFixed(5)}° N` : "—"}
-          </b>
-          <b>
-            {lng !== null ? `${lng.toFixed(5)}° E` : "—"}
-          </b>
+          <b>{lat !== null ? `${lat.toFixed(5)}° N` : "—"}</b>
+          <b>{lng !== null ? `${lng.toFixed(5)}° E` : "—"}</b>
           <span>LIVE PARCEL ANALYSIS</span>
         </div>
       </section>
@@ -318,12 +316,27 @@ function IntelligenceContent() {
         </section>
       ) : (
         <>
+          {/* PROPERTY LISTING DETAILS */}
           <section className="public-land-card">
             <span>PUBLIC LAND LISTING</span>
 
-            <h2>
-              {land?.title || parcel || "Selected land"}
-            </h2>
+            <h2>{land?.title || parcel || "Selected land"}</h2>
+
+            <div
+              style={{
+                display: "inline-flex",
+                margin: "12px 0 20px",
+                padding: "9px 14px",
+                background:
+                  land?.listing_type === "LEASE" ? "#d7c49a" : "#b8ff5a",
+                color: "#07100d",
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: ".12em",
+              }}
+            >
+              {land?.listing_type === "LEASE" ? "AVAILABLE FOR LEASE" : "AVAILABLE FOR SALE"}
+            </div>
 
             <div className="public-land-facts">
               <div>
@@ -340,26 +353,129 @@ function IntelligenceContent() {
               </div>
 
               <div>
-                <small>PRICE</small>
-                <strong>
-                  {land?.asking_price || "ON REQUEST"}
-                </strong>
+                <small>
+                  {land?.listing_type === "LEASE" ? "LEASE AMOUNT" : "ASKING PRICE"}
+                </small>
+                <strong>{land?.asking_price || "ON REQUEST"}</strong>
               </div>
 
               <div>
                 <small>PURPOSE</small>
                 <strong>{land?.land_type || "—"}</strong>
               </div>
+
+              {land?.listing_type === "LEASE" && (
+                <div>
+                  <small>LEASE DURATION</small>
+                  <strong>{land.lease_duration || "Not specified"}</strong>
+                </div>
+              )}
             </div>
+          </section>
+
+          {/* OWNER-UPLOADED PROPERTY PHOTOS */}
+          <section
+            style={{
+              padding: "42px 0",
+              borderBottom: "1px solid rgba(255,255,255,.12)",
+            }}
+          >
+            <div className="section-heading">
+              <div>
+                <span>PROPERTY / OWNER PHOTOGRAPHS</span>
+                <h2>See the <i>property.</i></h2>
+              </div>
+
+              <p>
+                Actual photographs uploaded by the property owner.
+              </p>
+            </div>
+
+            {landLoading ? (
+              <p style={{ color: "#a8b3a9", padding: "20px 0" }}>
+                LOADING PROPERTY PHOTOS...
+              </p>
+            ) : landLoadError ? (
+              <p style={{ color: "#ff9c8e", padding: "20px 0" }}>
+                {landLoadError}
+              </p>
+            ) : propertyPhotos.length > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill,minmax(min(100%,260px),1fr))",
+                  gap: 16,
+                  marginTop: 24,
+                }}
+              >
+                {propertyPhotos.map((photo, index) => (
+                  <a
+                    key={`${photo.public_url}-${index}`}
+                    href={photo.public_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      position: "relative",
+                      display: "block",
+                      overflow: "hidden",
+                      background: "#14221a",
+                      aspectRatio: "4 / 3",
+                    }}
+                  >
+                    <img
+                      src={photo.public_url}
+                      alt={`Owner property photo ${index + 1}`}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                        transition: "transform .3s ease",
+                      }}
+                    />
+
+                    {photo.is_cover && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 12,
+                          top: 12,
+                          background: "#b8ff5a",
+                          color: "#07100d",
+                          padding: "8px 10px",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: ".12em",
+                        }}
+                      >
+                        COVER PHOTO
+                      </span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 20,
+                  padding: "36px 20px",
+                  border: "1px solid rgba(255,255,255,.14)",
+                  color: "#a8b3a9",
+                  fontSize: 12,
+                  textAlign: "center",
+                }}
+              >
+                NO OWNER PHOTOGRAPHS AVAILABLE FOR THIS PROPERTY
+              </div>
+            )}
           </section>
 
           {error && (
             <section className="intel-error">
               <span>INTELLIGENCE ENGINE</span>
               <strong>{error}</strong>
-              <p>
-                Check your satellite/AI provider keys and try again.
-              </p>
+              <p>Check your satellite/AI provider keys and try again.</p>
             </section>
           )}
 
@@ -526,9 +642,7 @@ function IntelligenceContent() {
                 max={Math.max(...years)}
                 step="1"
                 value={year ?? years[0]}
-                onChange={(e) =>
-                  setYear(Number(e.target.value))
-                }
+                onChange={(e) => setYear(Number(e.target.value))}
               />
             )}
 
@@ -551,9 +665,7 @@ function IntelligenceContent() {
 
               <div>
                 <span>EARLIEST SCENE</span>
-                <b>
-                  {years.length ? Math.min(...years) : "—"}
-                </b>
+                <b>{years.length ? Math.min(...years) : "—"}</b>
               </div>
 
               <div>
@@ -583,12 +695,8 @@ function IntelligenceContent() {
                 ].map(([name, item]) => (
                   <div key={String(name)}>
                     <strong>{String(name)}</strong>
-                    <span>
-                      {(item as any)?.evidence || "Unavailable"}
-                    </span>
-                    <small>
-                      {(item as any)?.limitations || ""}
-                    </small>
+                    <span>{(item as any)?.evidence || "Unavailable"}</span>
+                    <small>{(item as any)?.limitations || ""}</small>
                   </div>
                 ))}
               </div>
